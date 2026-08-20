@@ -1,0 +1,10 @@
+broker: mqtt://localhost:1883
+command_topic: robot/commands
+policies_topic: robot/policies
+status_topic: robot/status
+state_topic: robot/g1/real/state
+reference_state_topic: robot/g1/reference/state
+command_timeout_s: 1.0
+state_frequency_hz: 50.0
+connect_timeout_s: 5.0
+client_id: null
