@@ -362,7 +362,7 @@ class BasePolicy:
                     term_dim = self.obs_dims[term_name]
                     history_len = self.history_length_dict.get(group_name, 1)
                     total_dim = term_dim * history_len
-                    term_values = group_obs[0, start_idx : start_idx + total_dim]
+                    term_values = group_obs[0, start_idx: start_idx + total_dim]
                     print(f"  {term_name:20s} (dim={term_dim:2d}, hist={history_len}): {term_values}")
                     start_idx += total_dim
 
@@ -379,9 +379,9 @@ class BasePolicy:
             for term in self.obs_terms_sorted.get(grp, []):
                 dim = self.obs_dims[term] * self.history_length_dict.get(grp, 1)
                 if q is None and term == "dof_pos":
-                    q = buf[0, col : col + dim] / self.obs_scales.get("dof_pos", 1.0)
+                    q = buf[0, col: col + dim] / self.obs_scales.get("dof_pos", 1.0)
                 if dq is None and term == "dof_vel":
-                    dq = buf[0, col : col + dim] / self.obs_scales.get("dof_vel", 1.0)
+                    dq = buf[0, col: col + dim] / self.obs_scales.get("dof_vel", 1.0)
                 col += dim
         act = self.scaled_policy_action[0] if self.scaled_policy_action is not None else None
         d = np.degrees
@@ -423,21 +423,21 @@ class BasePolicy:
         if self.config.task.debug.force_zero_angular_velocity:
             current_obs_buffer_dict["base_ang_vel"] = np.zeros((1, 3))
         else:
-            current_obs_buffer_dict["base_ang_vel"] = robot_state_data[:, 7 + self.num_dofs + 3 : 7 + self.num_dofs + 6]
-        current_obs_buffer_dict["dof_pos"] = robot_state_data[:, 7 : 7 + self.num_dofs] - self.default_dof_angles
+            current_obs_buffer_dict["base_ang_vel"] = robot_state_data[:, 7 + self.num_dofs + 3: 7 + self.num_dofs + 6]
+        current_obs_buffer_dict["dof_pos"] = robot_state_data[:, 7: 7 + self.num_dofs] - self.default_dof_angles
         current_obs_buffer_dict["dof_vel"] = robot_state_data[
-            :, 7 + self.num_dofs + 6 : 7 + self.num_dofs + 6 + self.num_dofs
+            :, 7 + self.num_dofs + 6: 7 + self.num_dofs + 6 + self.num_dofs
         ]
 
         # Use pre-computed corrected gravity if available from interface, else compute
         # This logic seems very brittle. TODO: Return a dataclass instead of just a numpy array.
         expected_len = (
-            7 + self.num_dofs + 6 + self.num_dofs
+                7 + self.num_dofs + 6 + self.num_dofs
         )  # base_pos(3) + quat(4) + dof_pos + lin_vel(3) + ang_vel(3) + dof_vel
         if self.config.task.debug.force_upright_imu:
             current_obs_buffer_dict["projected_gravity"] = np.array([[0.0, 0.0, -1.0]])
         elif robot_state_data.shape[1] == expected_len + 3:
-            current_obs_buffer_dict["projected_gravity"] = robot_state_data[:, expected_len : expected_len + 3]
+            current_obs_buffer_dict["projected_gravity"] = robot_state_data[:, expected_len: expected_len + 3]
         else:
             v = np.array([[0, 0, -1]])
             current_obs_buffer_dict["projected_gravity"] = quat_rotate_inverse(current_obs_buffer_dict["base_quat"], v)
@@ -514,7 +514,7 @@ class BasePolicy:
 
     def get_init_target(self, robot_state_data):
         """Get initialization target joint positions."""
-        dof_pos = robot_state_data[:, 7 : 7 + self.num_dofs]
+        dof_pos = robot_state_data[:, 7: 7 + self.num_dofs]
         if self.get_ready_state:
             # Interpolate from current dof_pos to default angles
             q_target = dof_pos + (self.default_dof_angles - dof_pos) * (self.init_count / 500)
@@ -549,7 +549,7 @@ class BasePolicy:
                     kp_override = manual_cmd.get("kp")
                     kd_override = manual_cmd.get("kd")
                 else:
-                    q_target = robot_state_data[:, 7 : 7 + self.num_dofs]
+                    q_target = robot_state_data[:, 7: 7 + self.num_dofs]
             else:
                 # Prepare for inference - any preprocessing before RL inference
                 pass
@@ -580,7 +580,7 @@ class BasePolicy:
                 self.cmd_q,
                 self.cmd_dq,
                 self.cmd_tau,
-                robot_state_data[0, 7 : 7 + self.num_dofs],
+                robot_state_data[0, 7: 7 + self.num_dofs],
                 kp_override=kp_override,
                 kd_override=kd_override,
             )
@@ -621,7 +621,7 @@ class BasePolicy:
 
     def apply_control(self, control: ControlValues) -> None:
         """Apply the MQTT control fields understood by core policies."""
-        self._apply_velocity(VelCmd((control.vy, control.vx), control.yaw))
+        self._apply_velocity(VelCmd((control.vy, -control.vx), -control.yaw))
 
     # ============================================================================
     # Control Action Methods
