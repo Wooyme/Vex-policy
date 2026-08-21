@@ -13,6 +13,7 @@ from vex_policy.config.config_types import RuntimeConfig
 from vex_policy.mqtt import CommandInbox, MqttTransport, encode_robot_state
 from vex_policy.policies.base import BasePolicy
 from vex_policy.policies.locomotion import LocomotionPolicy
+from vex_policy.policies.sonic import SonicPolicy
 from vex_policy.policies.wbt import WholeBodyTrackingPolicy
 from vex_policy.utils.rate import RateLimiter
 
@@ -25,6 +26,8 @@ def _policy_class(kind: str) -> type[BasePolicy]:
         return LocomotionPolicy
     if kind == "wbt":
         return WholeBodyTrackingPolicy
+    if kind == "sonic":
+        return SonicPolicy
     raise ValueError(f"Unknown policy kind: {kind}")
 
 
@@ -235,6 +238,9 @@ class SwitchModePolicy:
             self._deactivate()
             for policy in self.policies.values():
                 policy.close()
+            close_interface = getattr(self.interface, "close", None)
+            if close_interface is not None:
+                close_interface()
             self.transport.close()
 
 

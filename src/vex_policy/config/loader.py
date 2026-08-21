@@ -67,15 +67,21 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
     resolved: list[ResolvedPolicy] = []
     rates: set[float] = set()
     for spec in runtime.policies:
-        model_path = spec.task.model_path
-        if "://" in model_path:
-            raise ValueError(f"Policy {spec.name!r} model_path must be a local file path")
-        candidate = Path(model_path).expanduser()
-        candidate = candidate.resolve()
-        if not candidate.is_file():
-            raise ValueError(f"Policy {spec.name!r} model file does not exist: {candidate}")
-        model_path = str(candidate)
-        task = replace(spec.task, model_path=model_path)
+        path_fields = ["model_path"]
+        if spec.implementation == "sonic":
+            path_fields.extend(("encoder_model_path", "planner_model_path"))
+        resolved_paths: dict[str, str] = {}
+        for field_name in path_fields:
+            model_path = getattr(spec.task, field_name, None)
+            if not model_path:
+                raise ValueError(f"Policy {spec.name!r} {field_name} must be configured")
+            if "://" in model_path:
+                raise ValueError(f"Policy {spec.name!r} {field_name} must be a local file path")
+            candidate = Path(model_path).expanduser().resolve()
+            if not candidate.is_file():
+                raise ValueError(f"Policy {spec.name!r} model file does not exist: {candidate}")
+            resolved_paths[field_name] = str(candidate)
+        task = replace(spec.task, **resolved_paths)
         policy_config = InferenceConfig(runtime.robot.config, spec.observation, task)
         rates.add(policy_config.task.rl_rate)
         resolved.append(ResolvedPolicy(spec, policy_config, spec.implementation))

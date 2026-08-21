@@ -1,0 +1,105 @@
+name: g1-sonic-idle-kneel
+implementation: sonic
+type: full_body
+inputs: [vx, vy, yaw, height]
+observation:
+  obs_dict:
+    actor_obs:
+    - token_state
+    - his_base_angular_velocity_10frame_step1
+    - his_body_joint_positions_10frame_step1
+    - his_body_joint_velocities_10frame_step1
+    - his_last_actions_10frame_step1
+    - his_gravity_dir_10frame_step1
+    encoder_obs:
+    - encoder_mode_4
+    - motion_joint_positions_10frame_step5
+    - motion_joint_velocities_10frame_step5
+    - motion_root_z_position_10frame_step5
+    - motion_root_z_position
+    - motion_anchor_orientation
+    - motion_anchor_orientation_10frame_step5
+    - motion_joint_positions_lowerbody_10frame_step5
+    - motion_joint_velocities_lowerbody_10frame_step5
+    - vr_3point_local_target
+    - vr_3point_local_orn_target
+    - smpl_joints_10frame_step1
+    - smpl_anchor_orientation_10frame_step1
+    - motion_joint_positions_wrists_10frame_step1
+  obs_dims:
+    token_state: 64
+    his_base_angular_velocity_10frame_step1: 30
+    his_body_joint_positions_10frame_step1: 290
+    his_body_joint_velocities_10frame_step1: 290
+    his_last_actions_10frame_step1: 290
+    his_gravity_dir_10frame_step1: 30
+    encoder_mode_4: 4
+    motion_joint_positions_10frame_step5: 290
+    motion_joint_velocities_10frame_step5: 290
+    motion_root_z_position_10frame_step5: 10
+    motion_root_z_position: 1
+    motion_anchor_orientation: 6
+    motion_anchor_orientation_10frame_step5: 60
+    motion_joint_positions_lowerbody_10frame_step5: 120
+    motion_joint_velocities_lowerbody_10frame_step5: 120
+    vr_3point_local_target: 9
+    vr_3point_local_orn_target: 12
+    smpl_joints_10frame_step1: 720
+    smpl_anchor_orientation_10frame_step1: 60
+    motion_joint_positions_wrists_10frame_step1: 60
+  obs_scales:
+    token_state: 1.0
+    his_base_angular_velocity_10frame_step1: 1.0
+    his_body_joint_positions_10frame_step1: 1.0
+    his_body_joint_velocities_10frame_step1: 1.0
+    his_last_actions_10frame_step1: 1.0
+    his_gravity_dir_10frame_step1: 1.0
+    encoder_mode_4: 1.0
+    motion_joint_positions_10frame_step5: 1.0
+    motion_joint_velocities_10frame_step5: 1.0
+    motion_root_z_position_10frame_step5: 1.0
+    motion_root_z_position: 1.0
+    motion_anchor_orientation: 1.0
+    motion_anchor_orientation_10frame_step5: 1.0
+    motion_joint_positions_lowerbody_10frame_step5: 1.0
+    motion_joint_velocities_lowerbody_10frame_step5: 1.0
+    vr_3point_local_target: 1.0
+    vr_3point_local_orn_target: 1.0
+    smpl_joints_10frame_step1: 1.0
+    smpl_anchor_orientation_10frame_step1: 1.0
+    motion_joint_positions_wrists_10frame_step1: 1.0
+  history_length_dict:
+    actor_obs: 1
+    encoder_obs: 1
+task:
+  model_path: models/sonic/model_decoder.onnx
+  rl_rate: 50.0
+  policy_action_scale: 1.0
+  action_scales_by_effort_limit_over_p_gain: true
+  use_phase: false
+  gait_period: 1.0
+  skip_stiff_prompt: true
+  auto_walk_on_vel_cmd: true
+  use_sim_time: false
+  desired_base_height: 0.78874
+  residual_upper_body_action: false
+  print_observations: false
+  motion_start_timestep: 0
+  motion_end_timestep: null
+  debug:
+    force_upright_imu: false
+    force_zero_angular_velocity: false
+    force_zero_action: false
+  encoder_model_path: models/sonic/model_encoder.onnx
+  planner_model_path: models/sonic/planner_sonic.onnx
+  inference_provider: auto
+  planner_mode: 6
+  planner_version: 2
+  planner_rate: 10.0
+  lowcmd_publish_rate: 500.0
+  low_state_timeout_s: 0.1
+  motion_look_ahead_steps: 2
+  planner_seed: 1234
+  planner_default_height: 0.78874
+  planner_encoder_mode: 0
+

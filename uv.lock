@@ -281,15 +281,6 @@ wheels = [
 ]
 
 [[package]]
-name = "far-unitree-sdk"
-version = "0.1.4"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0a/44/600021d0bd834cdd823fea47ff17f215c01bcaf868781622247134edc102/far_unitree_sdk-0.1.4-cp311-cp311-manylinux_2_31_aarch64.whl", hash = "sha256:35689fcaf549dec1cf0963d2a50b463a5ea0fdb955a605550a37ea4f89f2f419", size = 11490895, upload-time = "2026-07-01T23:59:07.511Z" },
-    { url = "https://files.pythonhosted.org/packages/04/a7/18091b2e737eb38d734d53e9941d92e55c9c91a71e3bf6fc8098124c7f45/far_unitree_sdk-0.1.4-cp311-cp311-manylinux_2_31_x86_64.whl", hash = "sha256:4796e278f64ccd37aec868ca1c74f0292f9797bacb02a7d8915d804ddd1d46ae", size = 11601027, upload-time = "2026-07-01T23:59:10.202Z" },
-]
-
-[[package]]
 name = "flatbuffers"
 version = "25.12.19"
 source = { registry = "https://pypi.org/simple" }
@@ -803,7 +794,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "defusedxml" },
-    { name = "far-unitree-sdk" },
     { name = "loguru" },
     { name = "numpy" },
     { name = "onnx" },
@@ -814,10 +804,6 @@ dependencies = [
     { name = "pyyaml" },
     { name = "pyzmq" },
     { name = "termcolor" },
-]
-
-[package.optional-dependencies]
-unitree-high-level = [
     { name = "unitree-sdk2py" },
 ]
 
@@ -832,7 +818,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "defusedxml", specifier = ">=0.7" },
-    { name = "far-unitree-sdk", specifier = "==0.1.4" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "onnx", specifier = ">=1.16" },
@@ -843,9 +828,8 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6" },
     { name = "pyzmq", specifier = ">=26" },
     { name = "termcolor", specifier = ">=2.4" },
-    { name = "unitree-sdk2py", marker = "extra == 'unitree-high-level'", git = "https://github.com/unitreerobotics/unitree_sdk2_python.git?rev=65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5" },
+    { name = "unitree-sdk2py", git = "https://github.com/unitreerobotics/unitree_sdk2_python.git?rev=65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5" },
 ]
-provides-extras = ["unitree-high-level"]
 
 [package.metadata.requires-dev]
 dev = [

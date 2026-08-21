@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import ConfigDict
+from typing import Literal
+
+from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
 
 
@@ -36,3 +38,21 @@ class TaskConfig:
     motion_start_timestep: int = 0
     motion_end_timestep: int | None = None
     debug: DebugConfig = DebugConfig()
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class SonicTaskConfig(TaskConfig):
+    """GEAR-SONIC decoder, encoder, planner, and timing configuration."""
+
+    encoder_model_path: str = "models/sonic/model_encoder.onnx"
+    planner_model_path: str = "models/sonic/planner_sonic.onnx"
+    inference_provider: Literal["auto", "cpu", "cuda"] = "auto"
+    planner_mode: int = Field(default=0, ge=0, le=26)
+    planner_version: Literal[0, 1, 2] = 2
+    planner_rate: float = Field(default=10.0, gt=0)
+    lowcmd_publish_rate: float = Field(default=500.0, gt=0)
+    low_state_timeout_s: float = Field(default=0.1, gt=0)
+    motion_look_ahead_steps: int = Field(default=2, ge=0)
+    planner_seed: int = 1234
+    planner_default_height: float = 0.78874
+    planner_encoder_mode: Literal[0] = 0

@@ -126,9 +126,11 @@ class BasePolicy:
         """Initialize or reuse the shared robot interface."""
         if hasattr(self, "_shared_hardware_source"):
             self.interface = self._shared_hardware_source.interface
+            self._configure_interface_writer()
             return
         if hasattr(self, "_injected_interface"):
             self.interface = self._injected_interface
+            self._configure_interface_writer()
             return
         self.interface = create_interface(
             self.robot_config,
@@ -136,6 +138,15 @@ class BasePolicy:
             getattr(self, "_runtime_interface", "auto"),
             False,
         )
+        self._configure_interface_writer()
+
+    def _configure_interface_writer(self) -> None:
+        configure = getattr(self.interface, "configure_writer", None)
+        if configure is not None:
+            configure(
+                getattr(self.config.task, "lowcmd_publish_rate", 500.0),
+                getattr(self.config.task, "low_state_timeout_s", 0.1),
+            )
 
     def _init_policy_components(self, model_path, policy_action_scale, rl_rate):
         """Initialize policy-related components."""
@@ -535,6 +546,11 @@ class BasePolicy:
         # Stage 1: Read State
         with self.latency_tracker.measure("read_state"):
             robot_state_data = self.interface.get_low_state()
+        if robot_state_data is None:
+            stop_writer = getattr(self.interface, "stop_command_writer", None)
+            if stop_writer is not None:
+                stop_writer()
+            raise RuntimeError("Low-level robot state is unavailable or stale; command publishing has stopped")
 
         # Stage 2: Pre-processing
         with self.latency_tracker.measure("preprocessing"):
@@ -640,10 +656,17 @@ class BasePolicy:
         """Reset policy-local phase/history and begin inference."""
         self._init_phase_components()
         self._handle_start_policy()
+        self._configure_interface_writer()
+        start_writer = getattr(self.interface, "start_command_writer", None)
+        if start_writer is not None:
+            start_writer()
 
     def deactivate(self) -> None:
         """Stop inference state without sending another low-level command."""
         self._handle_stop_policy()
+        stop_writer = getattr(self.interface, "stop_command_writer", None)
+        if stop_writer is not None:
+            stop_writer()
 
     def step(self) -> None:
         """Execute one active control cycle."""

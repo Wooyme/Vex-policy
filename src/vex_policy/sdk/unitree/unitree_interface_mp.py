@@ -1,7 +1,6 @@
 """Multiprocess proxy for UnitreeInterface.
 
-Runs the real UnitreeInterface in a spawned child process so that the
-``unitree_interface`` C++ binding never shares an address space with rclpy.
+Runs the real Python DDS UnitreeInterface in a spawned child process.
 The proxy implements the same BaseInterface API via RPC-over-queues.
 """
 
@@ -17,7 +16,7 @@ from vex_policy.sdk.base.base_interface import BaseInterface
 
 
 class JoystickMsg(NamedTuple):
-    """Picklable stand-in for the C++ wireless-controller message."""
+    """Picklable wireless-controller snapshot."""
 
     lx: float
     ly: float
@@ -41,20 +40,7 @@ def _worker(
     res_q: mp.Queue,
 ):
     """Event loop that owns the real UnitreeInterface."""
-    import ctypes
-    import importlib.util
     import os
-    from pathlib import Path
-
-    # Preload unitree's bundled CycloneDDS before import to prevent
-    # ROS2's version from being picked up via LD_LIBRARY_PATH.
-    spec = importlib.util.find_spec("unitree_interface")
-    if spec and spec.submodule_search_locations:
-        ui_dir = Path(spec.submodule_search_locations[0])
-        for lib in ["libddsc.so.0", "libddscxx.so.0"]:
-            lib_path = ui_dir / lib
-            if lib_path.exists():
-                ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
 
     from vex_policy.sdk.unitree.unitree_interface import UnitreeInterface
 
@@ -95,24 +81,18 @@ def _worker(
                             )
                         )
                 elif method == "get_raw_motor_state":
-                    state = robot.unitree_interface.read_low_state()
-                    res_q.put(
-                        (
-                            "ok",
-                            {
-                                "q": list(state.motor.q),
-                                "dq": list(state.motor.dq),
-                                "tau_est": list(state.motor.tau_est),
-                                "voltage": list(state.motor.voltage),
-                                "temperature": list(state.motor.temperature),
-                                "imu_quat": list(state.imu.quat),
-                                "imu_omega": list(state.imu.omega),
-                                "imu_accel": list(state.imu.accel),
-                            },
-                        )
-                    )
+                    res_q.put(("ok", robot.get_raw_motor_state()))
                 elif method == "update_config":
                     robot.update_config(*args, **kwargs)
+                    res_q.put(("ok", None))
+                elif method == "configure_writer":
+                    robot.configure_writer(*args, **kwargs)
+                    res_q.put(("ok", None))
+                elif method == "start_command_writer":
+                    robot.start_command_writer()
+                    res_q.put(("ok", None))
+                elif method == "stop_command_writer":
+                    robot.stop_command_writer()
                     res_q.put(("ok", None))
                 else:
                     result = getattr(robot, method)(*args, **kwargs)
@@ -120,11 +100,8 @@ def _worker(
             except Exception as exc:
                 res_q.put(("err", exc))
     finally:
-        # Drop the C++ binding ref before the worker function returns so its
-        # destructor runs while the DDS event loop is still alive. Then bypass
-        # Python's atexit chain — any lingering C++ teardown after this point
-        # tends to surface as a misleading `Process SpawnProcess-1:` stderr
-        # noise even though the parent already got a clean shutdown.
+        # The DDS runtime owns background resources. Exit the isolated worker
+        # after dropping the interface so parent shutdown remains deterministic.
         del robot
         os._exit(0)
 
@@ -182,6 +159,15 @@ class UnitreeInterfaceMP(BaseInterface):
     def update_config(self, robot_config: RobotConfig):
         super().update_config(robot_config)
         self._call("update_config", robot_config)
+
+    def configure_writer(self, publish_rate_hz: float, state_timeout_s: float = 0.1):
+        self._call("configure_writer", publish_rate_hz, state_timeout_s)
+
+    def start_command_writer(self):
+        self._call("start_command_writer")
+
+    def stop_command_writer(self):
+        self._call("stop_command_writer")
 
     @property
     def kp_level(self):

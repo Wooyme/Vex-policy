@@ -11,7 +11,7 @@ from .runtime import (
     RobotRuntimeConfig,
     RuntimeConfig,
 )
-from .task import DebugConfig, TaskConfig
+from .task import DebugConfig, SonicTaskConfig, TaskConfig
 
 __all__ = [
     "DebugConfig",
@@ -24,5 +24,6 @@ __all__ = [
     "RobotConfig",
     "RobotRuntimeConfig",
     "RuntimeConfig",
+    "SonicTaskConfig",
     "TaskConfig",
 ]

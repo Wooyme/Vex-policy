@@ -12,7 +12,6 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 dependencies = [
     "defusedxml>=0.7",
-    "far-unitree-sdk==0.1.4",
     "loguru>=0.7",
     "numpy>=1.26,<3",
     "onnx>=1.16",
@@ -23,10 +22,6 @@ dependencies = [
     "pyyaml>=6",
     "pyzmq>=26",
     "termcolor>=2.4",
-]
-
-[project.optional-dependencies]
-unitree-high-level = [
     "unitree-sdk2py @ git+https://github.com/unitreerobotics/unitree_sdk2_python.git@65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5",
 ]
 
@@ -48,6 +43,7 @@ unitree_mp = "vex_policy.sdk.unitree.unitree_interface_mp:UnitreeInterfaceMP"
 [project.entry-points."vex_policy.policies"]
 locomotion = "vex_policy.policies.locomotion:LocomotionPolicy"
 wbt = "vex_policy.policies.wbt:WholeBodyTrackingPolicy"
+sonic = "vex_policy.policies.sonic:SonicPolicy"
 
 [tool.setuptools.packages.find]
 where = ["src"]

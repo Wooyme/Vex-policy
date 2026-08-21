@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .observation import ObservationConfig
 from .robot import RobotConfig
-from .task import TaskConfig
+from .task import SonicTaskConfig, TaskConfig
 
 PolicyType = Literal["full_body", "lower_body", "upper_body"]
 PolicyInput = Literal["vx", "vy", "yaw", "pitch", "height"]
@@ -59,7 +59,7 @@ class PolicySpec(StrictModel):
     type: PolicyType = "full_body"
     inputs: tuple[PolicyInput, ...] = ()
     observation: ObservationConfig
-    task: TaskConfig
+    task: TaskConfig | SonicTaskConfig
 
     @field_validator("name", "implementation")
     @classmethod

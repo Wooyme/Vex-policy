@@ -1,1 +1,8 @@
 Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+Portions derived from GR00T-WholeBodyControl / GEAR-SONIC:
+Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+Licensed under the Apache License, Version 2.0.
+
+Unitree SDK2 Python is distributed under the BSD 3-Clause License by
+Unitree Robotics. The SDK is an installation dependency and is not vendored.

@@ -2,17 +2,19 @@
 
 独立的 Unitree G1 ONNX policy 推理服务。控制命令只从 MQTT 读取，运行时可在多个已预加载 policy 之间安全切换，并发布真实机器人状态供 Vex 控制面板显示。
 
-本项目从 Holosoma 提交 `f5445d1b56a5bad39da17ce468df460477a3a1d5` 的 inference 包迁移而来，内部命名空间、配置、输入和运行时已完全独立；原项目不再是运行或安装依赖。许可与来源见 `LICENSE`、`NOTICE`。
+本项目从 Holosoma 提交 `f5445d1b56a5bad39da17ce468df460477a3a1d5` 的 inference 包迁移而来，并迁入 GR00T-WholeBodyControl 提交 `c374bae5b9039cd0ee71377e654d11ce1bc69e1d` 的 GEAR-SONIC 部署闭环。策略、encoder、planner、DDS 命令缓存与 CRC 均由 Python 实现，不包含项目自有的 C++、CMake 或 TensorRT 代码。许可与来源见 `LICENSE`、`NOTICE`。
 
 ## 环境
 
-`far-unitree-sdk==0.1.4` 不提供 CPython 3.13 wheel，因此项目固定使用 uv 管理的 Python 3.11：
+项目固定使用 uv 管理的 Python 3.11，并直接依赖 Unitree 官方 `unitree_sdk2py`：
 
 ```bash
+
 uv python install 3.11
 uv venv --python 3.11 --managed-python
 uv sync
 ```
+
 
 运行默认 G1 配置：
 
@@ -43,6 +45,28 @@ uv run vex-policy \
 | `g1-ppo-locomotion` | PPO locomotion | `vx`, `vy`, `yaw` |
 | `g1-fastsac-wbt-dancing` | FastSAC WBT | 无，选择后自动播放 clip |
 | `g1-ppo-wbt-dancing` | PPO WBT | 无，选择后自动播放 clip |
+
+## GEAR-SONIC
+
+SONIC 配置位于 `configs/g1/sonic/`，每个 planner mode 都是一个完整且独立的现有格式 YAML。该子目录不会被默认的 `configs/g1` 非递归加载影响。
+
+先将上游三个模型放到 `models/sonic/`：
+
+```text
+gear_sonic_deploy/policy/release/model_decoder.onnx       -> models/sonic/model_decoder.onnx
+gear_sonic_deploy/policy/release/model_encoder.onnx       -> models/sonic/model_encoder.onnx
+gear_sonic_deploy/planner/target_vel/V2/planner_sonic.onnx -> models/sonic/planner_sonic.onnx
+```
+
+模型权重不提交到 Git。也可以在 YAML 中把三个路径改成部署机上的绝对路径。启动全部 27 个模式：
+
+```bash
+uv run vex-policy --policy-config configs/g1/sonic --interface eth0
+```
+
+三个 ONNX session 按模型路径和 provider 共享，27 个 policy 不会重复加载权重。默认 `inference_provider: auto` 优先 CUDA，缺少 CUDA provider 时回退 CPU；也可显式设为 `cpu` 或 `cuda`。
+
+运行时保持源部署的三种频率：decoder/encoder 控制循环 50Hz、planner 调度 10Hz、LowCmd writer 500Hz。writer 每 2ms 重发最近的线程安全命令快照，并填充 `mode_pr`、LowState 中的 `mode_machine` 和纯 Python CRC；LowState CRC 错误或超过 `low_state_timeout_s` 未更新时不会发布。
 
 配置按变化频率拆分：
 
@@ -107,17 +131,11 @@ Unitree 低层接口当前没有世界位置估计，所以真实状态中的 `b
 - 急停或超时解除后不会自动恢复；必须先发送非急停空 policy，再重新选择。
 - 两个 policy 直接切换时会停止旧实例、更新目标 KP/KD、重置目标状态，并保留一个控制周期的低层命令空档。
 
-这里的“停止”明确表示停止发送低层命令，机器人最终行为由固件 watchdog/当前控制模式决定。部署前必须在安全支撑环境验证固件侧行为，MQTT estop 不能代替物理急停。
+这里的“停止”会禁用 500Hz writer 并清空缓存，机器人最终行为由固件 watchdog/当前控制模式决定。部署前必须在安全支撑环境验证固件侧行为，MQTT estop 不能代替物理急停。
 
-## Unitree high-level
+## Unitree SDK
 
-迁移的 `vex_policy.sdk.unitree_high_level` 默认只做懒加载。如需使用其 arm/loco client：
-
-```bash
-uv sync --extra unitree-high-level
-```
-
-该 extra 固定到 Unitree 官方 `unitree_sdk2_python` 提交 `65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5`，并通过子进程代理隔离 CycloneDDS。
+低层和 high-level 客户端统一使用 Unitree 官方 `unitree_sdk2_python` 提交 `65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5`。不再依赖 `far-unitree-sdk` 或 `unitree_interface` pybind 模块；需要进程隔离时仍可选择 `unitree_mp` backend。
 
 ## 验证
 
