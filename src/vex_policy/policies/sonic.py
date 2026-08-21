@@ -13,6 +13,7 @@ from loguru import logger
 from vex_policy.config.config_types import InferenceConfig, SonicTaskConfig
 from vex_policy.inputs.api.commands import ControlValues
 from vex_policy.policies.base import BasePolicy
+from vex_policy.policies.sonic_motion import load_motion_directory
 from vex_policy.policies.sonic_planner import (
     HW_TO_POLICY,
     MODE_NAMES,
@@ -148,6 +149,8 @@ class SonicPolicy(BasePolicy):
         self._planner_stop: threading.Event | None = None
         self._planner_thread: threading.Thread | None = None
         self._planner_robot_state: tuple[np.ndarray, np.ndarray] | None = None
+        self._reference_motion: MotionSequence | None = None
+        self._reference_motion_name: str | None = None
         self._motion: MotionSequence | None = None
         self._pending_motion: MotionSequence | None = None
         self._motion_frame = 0
@@ -178,22 +181,36 @@ class SonicPolicy(BasePolicy):
         provider = self.sonic_task.inference_provider
         self.onnx_policy_session = _shared_session(model_path, provider)
         self.encoder_session = _shared_session(self.sonic_task.encoder_model_path, provider)
-        planner_session = _shared_session(self.sonic_task.planner_model_path, provider)
         self._validate_session(self.onnx_policy_session, 994, 29, "SONIC decoder")
         self._validate_session(self.encoder_session, 1762, 64, "SONIC encoder")
         self.onnx_input_names = [item.name for item in self.onnx_policy_session.get_inputs()]
         self.onnx_output_names = [item.name for item in self.onnx_policy_session.get_outputs()]
         self.encoder_input_name = self.encoder_session.get_inputs()[0].name
         self.encoder_output_name = self.encoder_session.get_outputs()[0].name
-        self.planner = SonicPlanner(
-            self.sonic_task.planner_model_path,
-            provider=provider,
-            version=self.sonic_task.planner_version,
-            look_ahead_steps=self.sonic_task.motion_look_ahead_steps,
-            default_height=self.sonic_task.planner_default_height,
-            seed=self.sonic_task.planner_seed,
-            session=planner_session,
-        )
+        if self.sonic_task.motion_source == "planner":
+            planner_session = _shared_session(self.sonic_task.planner_model_path, provider)
+            self.planner: SonicPlanner | None = SonicPlanner(
+                self.sonic_task.planner_model_path,
+                provider=provider,
+                version=self.sonic_task.planner_version,
+                look_ahead_steps=self.sonic_task.motion_look_ahead_steps,
+                default_height=self.sonic_task.planner_default_height,
+                seed=self.sonic_task.planner_seed,
+                session=planner_session,
+            )
+            self._reference_motion = None
+            self._reference_motion_name = None
+        else:
+            self.planner = None
+            motion_data_path = self.sonic_task.motion_data_path
+            if not motion_data_path:
+                raise ValueError("SONIC directory motion source requires motion_data_path")
+            self._reference_motion_name, self._reference_motion = load_motion_directory(
+                motion_data_path,
+                motion_name=self.sonic_task.motion_name,
+                start_frame=self.sonic_task.motion_start_timestep,
+                end_frame=self.sonic_task.motion_end_timestep,
+            )
         self.onnx_kp, self.onnx_kd = _source_control_gains()
 
         def policy_act(observation):
@@ -221,9 +238,14 @@ class SonicPolicy(BasePolicy):
         self._stop_planner()
         self._reset_sonic_state()
         super().activate()
-        self._planner_stop = threading.Event()
-        self._planner_thread = threading.Thread(target=self._planner_loop, name="sonic-planner-10hz", daemon=True)
-        self._planner_thread.start()
+        if self.sonic_task.motion_source == "directory":
+            with self._motion_lock:
+                self._motion = self._reference_motion
+            logger.info(f"SONIC playing reference motion: {self._reference_motion_name}")
+        else:
+            self._planner_stop = threading.Event()
+            self._planner_thread = threading.Thread(target=self._planner_loop, name="sonic-planner-10hz", daemon=True)
+            self._planner_thread.start()
 
     def deactivate(self) -> None:
         self._stop_planner()
@@ -245,6 +267,8 @@ class SonicPolicy(BasePolicy):
         self._planner_wakeup.clear()
 
     def apply_control(self, control: ControlValues) -> None:
+        if self.sonic_task.motion_source == "directory":
+            return
         # Preserve the repository's panel-to-robot convention: (vy, -vx, -yaw).
         local = np.asarray([control.vy, -control.vx], dtype=np.float32)
         speed = float(np.linalg.norm(local))
@@ -324,6 +348,8 @@ class SonicPolicy(BasePolicy):
             )
             if due:
                 try:
+                    if self.planner is None:
+                        raise RuntimeError("SONIC planner loop started without a planner")
                     context = (
                         self.planner.initial_context(robot[1])
                         if motion is None
@@ -403,9 +429,7 @@ class SonicPolicy(BasePolicy):
             raise RuntimeError(f"Unexpected SONIC decoder observation shape: {observation.shape}")
         return observation
 
-    def _encoder_observation(
-        self, motion: MotionSequence, frame: int, robot_quaternion: np.ndarray
-    ) -> np.ndarray:
+    def _encoder_observation(self, motion: MotionSequence, frame: int, robot_quaternion: np.ndarray) -> np.ndarray:
         observation = np.zeros(1762, dtype=np.float32)
         observation[0] = float(self.sonic_task.planner_encoder_mode)
         indices = np.minimum(frame + np.arange(10) * 5, motion.frames - 1)
@@ -428,8 +452,9 @@ class SonicPolicy(BasePolicy):
         self._append_history(robot_state_data)
         quaternion = np.asarray(robot_state_data[0, 3:7], dtype=np.float32)
         joint_positions_hw = np.asarray(robot_state_data[0, 7 : 7 + self.num_dofs], dtype=np.float32)
-        self._planner_robot_state = (quaternion.copy(), joint_positions_hw.copy())
-        self._planner_wakeup.set()
+        if self.sonic_task.motion_source == "planner":
+            self._planner_robot_state = (quaternion.copy(), joint_positions_hw.copy())
+            self._planner_wakeup.set()
         motion = self._consume_pending_motion(quaternion)
         if motion is None:
             return np.zeros((1, self.num_dofs), dtype=np.float32)
@@ -451,6 +476,10 @@ class SonicPolicy(BasePolicy):
         with self._motion_lock:
             if self._motion_frame < max_frame:
                 self._motion_frame += 1
+            elif self.sonic_task.motion_source == "directory" and self.sonic_task.motion_loop:
+                self._motion_frame = 0
+                self._heading_robot_initial = None
+                self._heading_reference_initial = None
             elif self.sonic_task.planner_mode in ONE_SHOT_MODES:
                 self._one_shot_complete = True
         return action_hw

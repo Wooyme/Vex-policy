@@ -210,7 +210,8 @@ class SonicPlanner:
         interpolated = (
             motion.joint_positions[f0] * (1 - weights[:, None]) + motion.joint_positions[f1] * weights[:, None]
         )
-        context[0, :, 7 + POLICY_TO_HW] = interpolated
+        context_joints = context[0, :, 7:]
+        context_joints[:, POLICY_TO_HW] = interpolated
         return context
 
     def infer(self, context: np.ndarray, command: MovementCommand) -> MotionSequence:

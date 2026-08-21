@@ -47,6 +47,10 @@ class SonicTaskConfig(TaskConfig):
     encoder_model_path: str = "models/sonic/model_encoder.onnx"
     planner_model_path: str = "models/sonic/planner_sonic.onnx"
     inference_provider: Literal["auto", "cpu", "cuda"] = "auto"
+    motion_source: Literal["planner", "directory"] = "planner"
+    motion_data_path: str | None = None
+    motion_name: str | None = None
+    motion_loop: bool = False
     planner_mode: int = Field(default=0, ge=0, le=26)
     planner_version: Literal[0, 1, 2] = 2
     planner_rate: float = Field(default=10.0, gt=0)

@@ -13,6 +13,7 @@ from vex_policy.config.config_types import (
     PolicySpec,
     RobotRuntimeConfig,
     RuntimeConfig,
+    SonicTaskConfig,
 )
 from vex_policy.robots import G1_29DOF
 
@@ -69,7 +70,11 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
     for spec in runtime.policies:
         path_fields = ["model_path"]
         if spec.implementation == "sonic":
-            path_fields.extend(("encoder_model_path", "planner_model_path"))
+            if not isinstance(spec.task, SonicTaskConfig):
+                raise ValueError(f"Policy {spec.name!r} requires SonicTaskConfig")
+            path_fields.append("encoder_model_path")
+            if spec.task.motion_source == "planner":
+                path_fields.append("planner_model_path")
         resolved_paths: dict[str, str] = {}
         for field_name in path_fields:
             model_path = getattr(spec.task, field_name, None)
@@ -81,6 +86,16 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             if not candidate.is_file():
                 raise ValueError(f"Policy {spec.name!r} model file does not exist: {candidate}")
             resolved_paths[field_name] = str(candidate)
+        if spec.implementation == "sonic" and spec.task.motion_source == "directory":
+            motion_data_path = spec.task.motion_data_path
+            if not motion_data_path:
+                raise ValueError(f"Policy {spec.name!r} motion_data_path must be configured for directory motion")
+            if "://" in motion_data_path:
+                raise ValueError(f"Policy {spec.name!r} motion_data_path must be a local directory path")
+            motion_directory = Path(motion_data_path).expanduser().resolve()
+            if not motion_directory.is_dir():
+                raise ValueError(f"Policy {spec.name!r} motion directory does not exist: {motion_directory}")
+            resolved_paths["motion_data_path"] = str(motion_directory)
         task = replace(spec.task, **resolved_paths)
         policy_config = InferenceConfig(runtime.robot.config, spec.observation, task)
         rates.add(policy_config.task.rl_rate)

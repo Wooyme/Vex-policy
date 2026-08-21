@@ -66,7 +66,17 @@ uv run vex-policy --policy-config configs/g1/sonic --interface eth0
 
 三个 ONNX session 按模型路径和 provider 共享，27 个 policy 不会重复加载权重。默认 `inference_provider: auto` 优先 CUDA，缺少 CUDA provider 时回退 CPU；也可显式设为 `cpu` 或 `cuda`。
 
-运行时保持源部署的三种频率：decoder/encoder 控制循环 50Hz、planner 调度 10Hz、LowCmd writer 500Hz。writer 每 2ms 重发最近的线程安全命令快照，并填充 `mode_pr`、LowState 中的 `mode_machine` 和纯 Python CRC；LowState CRC 错误或超过 `low_state_timeout_s` 未更新时不会发布。
+也支持不加载 planner、直接播放 `gear_sonic_deploy` 格式的参考动作。完整配置见 `configs/examples/g1_sonic_motion_directory.yaml`，将其中的 `motion_data_path` 改为动作路径后运行：
+
+```bash
+uv run vex-policy \
+  --policy-config configs/examples/g1_sonic_motion_directory.yaml \
+  --interface eth0
+```
+
+`motion_data_path` 可以指向一个动作目录，也可以指向包含多个动作子目录的集合；集合中有多个有效动作时需要填写 `motion_name`。每个动作目录包含带表头的 `joint_pos.csv`、`joint_vel.csv`、`body_pos.csv` 和 `body_quat.csv`，采样率为 50Hz，29 个关节列使用 IsaacLab/policy 顺序，根四元数使用 `wxyz`。`motion_loop: false` 会在动作末帧保持，设为 `true` 则循环播放。目录模式只加载 decoder 和 encoder，不校验也不创建 planner session。
+
+planner 模式保持源部署的三种频率：decoder/encoder 控制循环 50Hz、planner 调度 10Hz、LowCmd writer 500Hz；目录模式不启动 10Hz planner 线程。writer 每 2ms 重发最近的线程安全命令快照，并填充 `mode_pr`、LowState 中的 `mode_machine` 和纯 Python CRC；LowState CRC 错误或超过 `low_state_timeout_s` 未更新时不会发布。
 
 配置按变化频率拆分：
 
