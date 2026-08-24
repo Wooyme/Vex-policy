@@ -1,4 +1,4 @@
-name: g1-wbt-example
+name: g1-doggy1
 implementation: wbt
 type: full_body
 inputs: [ ]
@@ -46,9 +46,9 @@ task:
   desired_base_height: 0.75
   residual_upper_body_action: false
   print_observations: false
-#  motion_data_path: reference/knee_down/knee_down_fixed.npz
-  motion_start_timestep: 0
-  motion_end_timestep: null
+  motion_start_timestep: 3216
+  motion_end_timestep: 3600
+  motion_loop: true
   debug:
     force_upright_imu: false
     force_zero_angular_velocity: false
