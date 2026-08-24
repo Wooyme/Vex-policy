@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Protocol, runtime_checkable
 
 import numpy as np
 import onnx
@@ -13,7 +12,7 @@ from termcolor import colored
 from vex_policy.config.config_types.inference import InferenceConfig
 from vex_policy.policies import BasePolicy
 from vex_policy.policies.guard.wbt import WbtGuard
-from vex_policy.policies.wbt_utils import MotionClockUtil, PinocchioRobot, TimestepUtil
+from vex_policy.policies.wbt_utils import MotionClockUtil, PinocchioRobot, TimestepUtil, NpzTargetSource
 from vex_policy.utils.clock import ClockSub
 from vex_policy.utils.math.quat import (
     matrix_from_quat,
@@ -26,23 +25,12 @@ from vex_policy.utils.math.quat import (
 )
 
 
-@runtime_checkable
-class TargetSource(Protocol):
-    """Supplies the tracking target, replacing the ONNX clip. Always returns a
-    valid ``(motion_command (1, 2*num_dofs), ref_quat_xyzw (4,))``."""
-
-    def get_target(self, num_dofs: int, rl_rate_hz: float, urdf_path: str | None): ...
-
-
 class WholeBodyTrackingPolicy(BasePolicy):
     def __init__(self, config: InferenceConfig):
+        self._target_source = None
+        self.scaled_policy_action = None
+        self.last_policy_action = None
         self.config = config
-
-        # Injected target source (NPZ / teleop). Unset -> ONNX clip.
-        # Subclasses (e.g. VexWBTPolicy) set this *before* calling
-        # super().__init__(), so don't clobber an already-injected source.
-        if not hasattr(self, "_target_source"):
-            self._target_source: TargetSource | None = None
 
         # initialize motion state
         self.motion_clip_progressing = False
@@ -145,6 +133,10 @@ class WholeBodyTrackingPolicy(BasePolicy):
         return xyzw_to_wxyz(ref_ori_xyzw)
 
     def setup_policy(self, model_path):
+        if self.config.task.motion_data_path:
+            self._target_source = NpzTargetSource(self.config.task.motion_data_path,
+                                                  dof_names=self.dof_names,
+                                                  start_frame=self.config.task.motion_start_timestep)
         self.onnx_policy_session = onnxruntime.InferenceSession(model_path)
         self.onnx_input_names = [inp.name for inp in self.onnx_policy_session.get_inputs()]
         self.onnx_output_names = [out.name for out in self.onnx_policy_session.get_outputs()]
@@ -169,18 +161,20 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
         # get initial command and ref quat xyzw at the configured start timestep
         time_step = np.array([[self.config.task.motion_start_timestep]], dtype=np.float32)
+        if self._target_source is not None:
+            self.motion_command_t, self.ref_quat_xyzw_t = self._target_source.get_target()
+        else:
+            # Use configured observation dimensions (including history) instead of a hard-coded value.
+            actor_obs_template = self.obs_buf_dict.get("actor_obs")
+            if actor_obs_template is None:
+                raise ValueError("Observation group 'actor_obs' must be configured for WBT policy.")
+            obs = actor_obs_template.copy()
+            input_feed = {"obs": obs, "time_step": time_step}
+            outputs = self.onnx_policy_session.run(["joint_pos", "joint_vel", "ref_quat_xyzw"], input_feed)
 
-        # Use configured observation dimensions (including history) instead of a hard-coded value.
-        actor_obs_template = self.obs_buf_dict.get("actor_obs")
-        if actor_obs_template is None:
-            raise ValueError("Observation group 'actor_obs' must be configured for WBT policy.")
-        obs = actor_obs_template.copy()
-        input_feed = {"obs": obs, "time_step": time_step}
-        outputs = self.onnx_policy_session.run(["joint_pos", "joint_vel", "ref_quat_xyzw"], input_feed)
-
-        # motion_command_t/ref_quat_xyzw_t will be used in get_current_obs_buffer_dict
-        self.motion_command_t = np.concatenate(outputs[0:2], axis=1)  # (1, 58)
-        self.ref_quat_xyzw_t = outputs[2]
+            # motion_command_t/ref_quat_xyzw_t will be used in get_current_obs_buffer_dict
+            self.motion_command_t = np.concatenate(outputs[0:2], axis=1)  # (1, 58)
+            self.ref_quat_xyzw_t = outputs[2]
         # duplicate, will be used in _get_init_target and _handle_stop_policy
         self.motion_command_0 = self.motion_command_t.copy()
         self.ref_quat_xyzw_0 = self.ref_quat_xyzw_t.copy()
@@ -218,6 +212,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.curr_motion_timestep = self.timestep_util.timestep
         self.robot_yaw_offset = 0.0
         self.motion_yaw_offset = 0.0
+
 
     def _on_policy_switched(self, model_path: str):
         super()._on_policy_switched(model_path)
@@ -290,9 +285,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
         # Override the ONNX's self-generated clip target with the injected source.
         if self._target_source is not None:
-            self.motion_command_t, self.ref_quat_xyzw_t = self._target_source.get_target(
-                self.num_dofs, self.config.task.rl_rate, getattr(self.config.robot, "urdf_path", None)
-            )
+            self.motion_command_t, self.ref_quat_xyzw_t = self._target_source.get_target()
 
         # clip policy action
         policy_action = np.clip(policy_action, -100, 100)
@@ -440,6 +433,8 @@ class WholeBodyTrackingPolicy(BasePolicy):
     def _handle_start_motion_clip(self):
         """Handle start motion clip action."""
         self.timestep_util.reset(start_timestep=self.config.task.motion_start_timestep)
+        if self._target_source:
+            self._target_source.reset(self.config.task.motion_start_timestep)
         self.curr_motion_timestep = self.timestep_util.timestep
         self.motion_clip_progressing = True
         if self.config.task.motion_start_timestep > 0 or self.config.task.motion_end_timestep is not None:

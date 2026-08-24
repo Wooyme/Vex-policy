@@ -1,6 +1,6 @@
 # Point motion_data_path at either one clip directory containing the four CSV
 # files or a collection directory containing one subdirectory per clip.
-name: g1-sonic-motion-directory
+name: g1-sonic-example
 implementation: sonic
 type: full_body
 inputs: []
@@ -95,7 +95,7 @@ task:
   encoder_model_path: models/sonic/model_encoder.onnx
   inference_provider: auto
   motion_source: directory
-  motion_data_path: reference/dance_in_da_party_001__A464
+  motion_data_path: reference/knee_down
   # Required when motion_data_path contains more than one valid clip.
   motion_name: null
   # false holds the final frame; true restarts from frame 0.

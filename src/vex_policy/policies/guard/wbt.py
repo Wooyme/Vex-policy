@@ -8,10 +8,8 @@ from vex_policy.utils.math import quat_rotate_inverse, xyzw_to_wxyz
 class WbtGuard(BaseGuard):
     def start_check(self) -> tuple[bool, str | None]:
         robot_state_data = self.policy.interface.get_low_state()
-        obs = self.policy.prepare_obs_for_rl(robot_state_data)
-        start_motion_timestep = self.policy.config.task.motion_start_timestep
-        input_feed = {"time_step": np.array([[start_motion_timestep]], dtype=np.float32), "obs": obs["actor_obs"]}
-        _, motion_command_t, ref_quat_xyzw_t = self.policy.policy(input_feed)
+        motion_command_t = self.policy.motion_command_0
+        ref_quat_xyzw_t = self.policy.ref_quat_xyzw_0
         if self.bad_ref_ori(xyzw_to_wxyz(ref_quat_xyzw_t), robot_state_data):
             self.policy.logger.warning("start check failed, bad_ref_ori")
             return False, "start check failed, bad_ref_ori"

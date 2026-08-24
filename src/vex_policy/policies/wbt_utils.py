@@ -139,23 +139,32 @@ class PinocchioRobot:
         return xml_text
 
 
-_TORSO_BODY_IDX = 16  # body_names index matching robot.motion.body_name_ref (g1_29dof)
+_TORSO_BODY_IDX = 29  # body_names index matching robot.motion.body_name_ref (g1_29dof)
 
 
 class NpzTargetSource:
     """Replays a converted motion NPZ as a WBT ``TargetSource``,
     frame-by-frame, freezing on the last frame."""
 
-    def __init__(self, npz_path: str | Path, body_ref_idx: int = _TORSO_BODY_IDX):
+    def __init__(self, npz_path: str | Path, dof_names: tuple[str],
+                 start_frame: int = 0):
         with np.load(str(npz_path)) as d:
-            pos, vel = d["joint_pos"], d["joint_vel"]
-            self._pos = (pos[:, 7:] if pos.shape[1] > 29 else pos).astype(np.float32)  # strip base: (T, 29)
-            self._vel = (vel[:, 6:] if vel.shape[1] > 29 else vel).astype(np.float32)  # (T, 29)
+            pos, vel, joint_names,body_names = d["joint_pos"], d["joint_vel"], d['joint_names'].tolist(),d['body_names'].tolist()
+            body_ref_idx = body_names.index("torso_link")
+            dof_order = []
+            for name in dof_names:
+                dof_order.append(joint_names.index(name))
+            self._pos = (pos[:, 7:][:,dof_order] if pos.shape[1] > 29 else pos).astype(np.float32)  # strip base: (T, 29)
+            self._vel = (vel[:, 6:][:,dof_order] if vel.shape[1] > 29 else vel).astype(np.float32)  # (T, 29)
             wxyz = d["body_quat_w"][:, body_ref_idx, :].astype(np.float32)  # (T, 4)
             self._ref_xyzw = wxyz[:, [1, 2, 3, 0]]
-        self._frame = 0
+        self._frame = start_frame
 
-    def get_target(self, num_dofs: int, rl_rate_hz: float, urdf_path: str | None):
+    def get_target(self):
         i = min(self._frame, len(self._pos) - 1)
         self._frame += 1
-        return np.concatenate([self._pos[i], self._vel[i]]).reshape(1, -1), self._ref_xyzw[i]
+        return np.concatenate([self._pos[i], self._vel[i]]).reshape(1, -1), self._ref_xyzw[
+            i].reshape(1, -1)
+
+    def reset(self,start_frame: int = 0):
+        self._frame = start_frame

@@ -35,6 +35,7 @@ class TaskConfig:
     desired_base_height: float = 0.75
     residual_upper_body_action: bool = False
     print_observations: bool = False
+    motion_data_path: str | None = None
     motion_start_timestep: int = 0
     motion_end_timestep: int | None = None
     motion_loop: bool = False
