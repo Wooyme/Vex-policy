@@ -34,8 +34,8 @@ def default_mqtt_config_path() -> Path:
 
 
 def load_runtime_config(
-    path: str | Path | None = None,
-    mqtt_path: str | Path | None = None,
+        path: str | Path | None = None,
+        mqtt_path: str | Path | None = None,
 ) -> tuple[RuntimeConfig, Path]:
     config_path = Path(path).expanduser().resolve() if path else default_config_path()
     if config_path.is_dir():
@@ -80,8 +80,6 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             model_path = getattr(spec.task, field_name, None)
             if not model_path:
                 raise ValueError(f"Policy {spec.name!r} {field_name} must be configured")
-            if "://" in model_path:
-                raise ValueError(f"Policy {spec.name!r} {field_name} must be a local file path")
             candidate = Path(model_path).expanduser().resolve()
             if not candidate.is_file():
                 raise ValueError(f"Policy {spec.name!r} model file does not exist: {candidate}")
@@ -90,14 +88,12 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             motion_data_path = spec.task.motion_data_path
             if not motion_data_path:
                 raise ValueError(f"Policy {spec.name!r} motion_data_path must be configured for directory motion")
-            if "://" in motion_data_path:
-                raise ValueError(f"Policy {spec.name!r} motion_data_path must be a local directory path")
             motion_directory = Path(motion_data_path).expanduser().resolve()
             if not motion_directory.is_dir():
                 raise ValueError(f"Policy {spec.name!r} motion directory does not exist: {motion_directory}")
             resolved_paths["motion_data_path"] = str(motion_directory)
         task = replace(spec.task, **resolved_paths)
-        policy_config = InferenceConfig(runtime.robot.config, spec.observation, task)
+        policy_config = InferenceConfig(runtime.robot.config, spec.observation, task, spec.guard)
         rates.add(policy_config.task.rl_rate)
         resolved.append(ResolvedPolicy(spec, policy_config, spec.implementation))
 

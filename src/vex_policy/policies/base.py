@@ -48,6 +48,8 @@ class BasePolicy:
         # Initialize latency tracking
         self._init_latency_tracking()
 
+        self.guard = None
+
     # ============================================================================
     # Initialization Methods
     # ============================================================================
@@ -652,8 +654,12 @@ class BasePolicy:
         if hasattr(self.interface, "no_action"):
             self.interface.no_action = 0
 
-    def activate(self) -> None:
+    def activate(self) -> str | None:
         """Reset policy-local phase/history and begin inference."""
+        if self.guard:
+            result, reason = self.guard.start_check()
+            if not result:
+                return reason
         self._init_phase_components()
         self._handle_start_policy()
         self._configure_interface_writer()

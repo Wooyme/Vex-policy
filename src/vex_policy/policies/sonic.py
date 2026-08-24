@@ -81,7 +81,7 @@ def _source_control_gains() -> tuple[np.ndarray, np.ndarray]:
         "7520_22": 0.025101925,
         "4010": 0.00425,
     }
-    stiffness = {name: value * natural_frequency**2 for name, value in armature.items()}
+    stiffness = {name: value * natural_frequency ** 2 for name, value in armature.items()}
     damping = {name: 2.0 * damping_ratio * value * natural_frequency for name, value in armature.items()}
     types = (
         "7520_22",
@@ -122,12 +122,12 @@ def _source_control_gains() -> tuple[np.ndarray, np.ndarray]:
 
 def _same_command(left: MovementCommand | None, right: MovementCommand) -> bool:
     return (
-        left is not None
-        and left.mode == right.mode
-        and left.speed == right.speed
-        and left.height == right.height
-        and np.array_equal(left.movement_direction, right.movement_direction)
-        and np.array_equal(left.facing_direction, right.facing_direction)
+            left is not None
+            and left.mode == right.mode
+            and left.speed == right.speed
+            and left.height == right.height
+            and np.array_equal(left.movement_direction, right.movement_direction)
+            and np.array_equal(left.facing_direction, right.facing_direction)
     )
 
 
@@ -234,10 +234,12 @@ class SonicPolicy(BasePolicy):
         self.last_policy_action = np.zeros((1, self.num_dofs), dtype=np.float32)
         self.scaled_policy_action = np.zeros((1, self.num_dofs), dtype=np.float32)
 
-    def activate(self) -> None:
+    def activate(self) -> str | None:
         self._stop_planner()
         self._reset_sonic_state()
-        super().activate()
+        reason = super().activate()
+        if reason:
+            return reason
         if self.sonic_task.motion_source == "directory":
             with self._motion_lock:
                 self._motion = self._reference_motion
@@ -334,17 +336,17 @@ class SonicPolicy(BasePolicy):
                 motion = self._motion
                 frame = self._motion_frame
             due = (
-                robot is not None
-                and not self._one_shot_complete
-                and (
-                    motion is None
-                    or not _same_command(last_command, command)
-                    or (
-                        command.mode not in STATIC_MODES
-                        and command.speed != 0.0
-                        and started - last_plan_at >= self._replan_interval(command.mode)
+                    robot is not None
+                    and not self._one_shot_complete
+                    and (
+                            motion is None
+                            or not _same_command(last_command, command)
+                            or (
+                                    command.mode not in STATIC_MODES
+                                    and command.speed != 0.0
+                                    and started - last_plan_at >= self._replan_interval(command.mode)
+                            )
                     )
-                )
             )
             if due:
                 try:
@@ -396,11 +398,11 @@ class SonicPolicy(BasePolicy):
         return motion
 
     def _append_history(self, robot_state_data: np.ndarray) -> None:
-        q_hw = robot_state_data[0, 7 : 7 + self.num_dofs]
-        dq_hw = robot_state_data[0, 7 + self.num_dofs + 6 : 7 + self.num_dofs + 6 + self.num_dofs]
+        q_hw = robot_state_data[0, 7: 7 + self.num_dofs]
+        dq_hw = robot_state_data[0, 7 + self.num_dofs + 6: 7 + self.num_dofs + 6 + self.num_dofs]
         q_policy = q_hw[POLICY_TO_HW] - self.default_dof_angles[POLICY_TO_HW]
         dq_policy = dq_hw[POLICY_TO_HW]
-        angular_velocity = robot_state_data[0, 7 + self.num_dofs + 3 : 7 + self.num_dofs + 6]
+        angular_velocity = robot_state_data[0, 7 + self.num_dofs + 3: 7 + self.num_dofs + 6]
         quaternion = robot_state_data[:, 3:7]
         gravity = quat_rotate_inverse(quaternion, np.asarray([[0.0, 0.0, -1.0]], dtype=np.float32))[0]
         self._state_history.append(
@@ -451,7 +453,7 @@ class SonicPolicy(BasePolicy):
     def rl_inference(self, robot_state_data):
         self._append_history(robot_state_data)
         quaternion = np.asarray(robot_state_data[0, 3:7], dtype=np.float32)
-        joint_positions_hw = np.asarray(robot_state_data[0, 7 : 7 + self.num_dofs], dtype=np.float32)
+        joint_positions_hw = np.asarray(robot_state_data[0, 7: 7 + self.num_dofs], dtype=np.float32)
         if self.sonic_task.motion_source == "planner":
             self._planner_robot_state = (quaternion.copy(), joint_positions_hw.copy())
             self._planner_wakeup.set()

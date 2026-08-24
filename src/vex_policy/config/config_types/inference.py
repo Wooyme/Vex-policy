@@ -3,6 +3,7 @@
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
+from .GuardConfig import GuardConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
 from .task import SonicTaskConfig, TaskConfig
@@ -13,3 +14,4 @@ class InferenceConfig:
     robot: RobotConfig
     observation: ObservationConfig
     task: TaskConfig | SonicTaskConfig
+    guard: GuardConfig | None = None

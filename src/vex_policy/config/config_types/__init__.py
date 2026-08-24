@@ -26,4 +26,5 @@ __all__ = [
     "RuntimeConfig",
     "SonicTaskConfig",
     "TaskConfig",
+    "GuardConfig"
 ]

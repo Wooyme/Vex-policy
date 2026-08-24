@@ -12,6 +12,7 @@ from termcolor import colored
 
 from vex_policy.config.config_types.inference import InferenceConfig
 from vex_policy.policies import BasePolicy
+from vex_policy.policies.guard.wbt import WbtGuard
 from vex_policy.policies.wbt_utils import MotionClockUtil, PinocchioRobot, TimestepUtil
 from vex_policy.utils.clock import ClockSub
 from vex_policy.utils.math.quat import (
@@ -71,7 +72,8 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
         super().__init__(config)
         self._configure_action_scales()
-
+        if self.config.guard:
+            self.guard = WbtGuard(self.config.guard, self)
         # Load stiff startup parameters from robot config
         if config.robot.stiff_startup_pos is not None:
             self._stiff_hold_q = np.array(config.robot.stiff_startup_pos, dtype=np.float32).reshape(1, -1)
@@ -134,7 +136,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
         # dof pos in real robot -> pinocchio robot
         num_dofs = self.num_dofs
-        dof_pos_in_real = robot_state_data[0, 7 : 7 + num_dofs]
+        dof_pos_in_real = robot_state_data[0, 7: 7 + num_dofs]
         dof_pos_in_pinocchio = dof_pos_in_real[self.pinocchio_robot.real2pinocchio_index]
 
         configuration = np.concatenate([root_pos, root_ori_xyzw, dof_pos_in_pinocchio], axis=0)
@@ -219,8 +221,6 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
     def _on_policy_switched(self, model_path: str):
         super()._on_policy_switched(model_path)
-        self.motion_command_t = self.motion_command_0.copy()
-        self.ref_quat_xyzw_t = self.ref_quat_xyzw_0.copy()
         self.motion_clip_progressing = False
         self.timestep_util.reset(start_timestep=0)
         self.curr_motion_timestep = self.timestep_util.timestep
@@ -231,7 +231,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
     def get_init_target(self, robot_state_data):
         """Get initialization target joint positions."""
-        dof_pos = robot_state_data[:, 7 : 7 + self.num_dofs]
+        dof_pos = robot_state_data[:, 7: 7 + self.num_dofs]
         if self.get_ready_state:
             # Interpolate from current dof_pos to first pose in motion command
             target_dof_pos = self.motion_command_0[:, : self.num_dofs]
@@ -252,21 +252,21 @@ class WholeBodyTrackingPolicy(BasePolicy):
         motion_ref_ori = self._remove_yaw_offset(motion_ref_ori, self.motion_yaw_offset)
 
         # robot_ref_ori
-        robot_ref_ori = self._get_ref_body_orientation_in_world(robot_state_data)  #  wxyz
+        robot_ref_ori = self._get_ref_body_orientation_in_world(robot_state_data)  # wxyz
         robot_ref_ori = self._remove_yaw_offset(robot_ref_ori, self.robot_yaw_offset)
 
         motion_ref_ori_b = matrix_from_quat(subtract_frame_transforms(robot_ref_ori, motion_ref_ori))
         current_obs_buffer_dict["motion_ref_ori_b"] = motion_ref_ori_b[..., :2].reshape(1, -1)
 
         # base_ang_vel
-        current_obs_buffer_dict["base_ang_vel"] = robot_state_data[:, 7 + self.num_dofs + 3 : 7 + self.num_dofs + 6]
+        current_obs_buffer_dict["base_ang_vel"] = robot_state_data[:, 7 + self.num_dofs + 3: 7 + self.num_dofs + 6]
 
         # dof_pos
-        current_obs_buffer_dict["dof_pos"] = robot_state_data[:, 7 : 7 + self.num_dofs] - self.default_dof_angles
+        current_obs_buffer_dict["dof_pos"] = robot_state_data[:, 7: 7 + self.num_dofs] - self.default_dof_angles
 
         # dof_vel
         current_obs_buffer_dict["dof_vel"] = robot_state_data[
-            :, 7 + self.num_dofs + 6 : 7 + self.num_dofs + 6 + self.num_dofs
+            :, 7 + self.num_dofs + 6: 7 + self.num_dofs + 6 + self.num_dofs
         ]
 
         # actions
@@ -408,9 +408,13 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
             # Stop motion clip at configured end timestep (keep policy running at final pose)
             if (end := self.config.task.motion_end_timestep) and self.curr_motion_timestep >= end:
-                self.logger.info(colored(f"Reached end timestep {end}, stopping motion clip", "yellow"))
-                self.motion_clip_progressing = False
-                self.curr_motion_timestep = end
+                if self.config.task.motion_loop:
+                    self.curr_motion_timestep = self.config.task.motion_start_timestep
+                    self.logger.info(colored(f"Loop=True, set to {self.curr_motion_timestep}", "green"))
+                else:
+                    self.logger.info(colored(f"Reached end timestep {end}, stopping motion clip", "yellow"))
+                    self.motion_clip_progressing = False
+                    self.curr_motion_timestep = end
 
     def _handle_stop_policy(self):
         """Handle stop policy action."""
@@ -424,8 +428,9 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.motion_clip_progressing = False
         self.timestep_util.reset(start_timestep=0)
         self.curr_motion_timestep = self.timestep_util.timestep
-        self.ref_quat_xyzw_t = self.ref_quat_xyzw_0.copy()
-        self.motion_command_t = self.motion_command_0.copy()
+        # When the ending ref differs significantly from the starting ref, returning to the starting ref is not a good way.
+        # self.ref_quat_xyzw_t = self.ref_quat_xyzw_0.copy()
+        # self.motion_command_t = self.motion_command_0.copy()
         self.robot_yaw_offset = 0.0
         self.motion_yaw_offset = 0.0
 
@@ -437,7 +442,6 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.timestep_util.reset(start_timestep=self.config.task.motion_start_timestep)
         self.curr_motion_timestep = self.timestep_util.timestep
         self.motion_clip_progressing = True
-
         if self.config.task.motion_start_timestep > 0 or self.config.task.motion_end_timestep is not None:
             start_str = str(self.config.task.motion_start_timestep)
             end_str = str(self.config.task.motion_end_timestep) if self.config.task.motion_end_timestep else "end"

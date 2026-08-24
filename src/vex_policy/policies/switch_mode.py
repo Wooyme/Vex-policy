@@ -35,15 +35,15 @@ class SwitchModePolicy:
     """Own one Unitree interface and switch any number of preloaded policies."""
 
     def __init__(
-        self,
-        runtime: RuntimeConfig,
-        resolved: tuple[ResolvedPolicy, ...],
-        *,
-        instances: dict[str, BasePolicy] | None = None,
-        inbox: CommandInbox | None = None,
-        transport: MqttTransport | None = None,
-        interface: Any | None = None,
-        clock=time.monotonic,
+            self,
+            runtime: RuntimeConfig,
+            resolved: tuple[ResolvedPolicy, ...],
+            *,
+            instances: dict[str, BasePolicy] | None = None,
+            inbox: CommandInbox | None = None,
+            transport: MqttTransport | None = None,
+            interface: Any | None = None,
+            clock=time.monotonic,
     ):
         self.runtime = runtime
         self.resolved = resolved
@@ -120,13 +120,19 @@ class SwitchModePolicy:
         self.reason = reason
 
     def _activate(self, name: str) -> None:
+        cur_state = self.state
         self.state = "switching"
         self.reason = None
         self._publish_status()
         self._deactivate()
         target = self.policies[name]
         target._resolve_control_gains()
-        target.activate()
+        reason = target.activate()
+        if reason:
+            self.state = cur_state
+            self.reason = reason
+            self._publish_status()
+            return
         self.active_policy = name
         self.state = "running"
 

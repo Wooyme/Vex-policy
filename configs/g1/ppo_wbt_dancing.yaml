@@ -1,16 +1,16 @@
 name: g1-ppo-wbt-dancing
 implementation: wbt
 type: full_body
-inputs: []
+inputs: [ ]
 observation:
   obs_dict:
     actor_obs:
-    - motion_command
-    - motion_ref_ori_b
-    - base_ang_vel
-    - dof_pos
-    - dof_vel
-    - actions
+      - motion_command
+      - motion_ref_ori_b
+      - base_ang_vel
+      - dof_pos
+      - dof_vel
+      - actions
   obs_dims:
     motion_command: 58
     motion_ref_pos_b: 3
@@ -52,4 +52,7 @@ task:
     force_upright_imu: false
     force_zero_angular_velocity: false
     force_zero_action: false
+guard:
+  bad_ref_ori_threshold: 0.8
+  bad_lower_joint_pos_threshold: 0.8
 

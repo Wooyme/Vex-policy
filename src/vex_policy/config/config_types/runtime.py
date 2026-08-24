@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .GuardConfig import GuardConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
 from .task import SonicTaskConfig, TaskConfig
@@ -60,6 +61,7 @@ class PolicySpec(StrictModel):
     inputs: tuple[PolicyInput, ...] = ()
     observation: ObservationConfig
     task: TaskConfig | SonicTaskConfig
+    guard: GuardConfig | None = None
 
     @field_validator("name", "implementation")
     @classmethod

@@ -37,6 +37,7 @@ class TaskConfig:
     print_observations: bool = False
     motion_start_timestep: int = 0
     motion_end_timestep: int | None = None
+    motion_loop: bool = False
     debug: DebugConfig = DebugConfig()
 
 
