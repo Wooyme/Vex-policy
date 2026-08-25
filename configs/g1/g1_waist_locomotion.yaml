@@ -2,11 +2,16 @@ name: g1-waist-locomotion
 implementation: waist_locomotion
 type: full_body
 inputs:
-- vx
-- vy
-- yaw
-- pitch
-- height
+- type: slider
+  parameter: {name: amplitude, min: 0.05, max: 0.20, default: 0.125}
+- type: slider
+  parameter: {name: frequency, min: 0.2, max: 2.0, default: 1.1}
+- type: slider
+  parameter: {name: x, min: -1.0, max: 1.0, default: 1.0}
+- type: slider
+  parameter: {name: y, min: -1.0, max: 1.0, default: 0.0}
+- type: slider
+  parameter: {name: z, min: -1.0, max: 1.0, default: 0.0}
 observation:
   obs_dict:
     actor_obs:
@@ -50,10 +55,6 @@ task:
   motion_start_timestep: 0
   motion_end_timestep: null
   motion_loop: false
-  default_amplitude_m: 0.125
-  amplitude_range_m: [0.05, 0.20]
-  frequency_range_hz: [0.2, 2.0]
-  default_direction: [1.0, 0.0, 0.0]
   debug:
     force_upright_imu: false
     force_zero_angular_velocity: false

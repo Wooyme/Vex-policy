@@ -278,8 +278,7 @@ class SwitchModePolicy:
 
         for name in desired:
             policy = self.policies[name]
-            spec = self._specs[name]
-            policy.apply_control(control.values_for(spec.inputs))
+            policy.apply_control(control.inputs[name])
         if not self._step_active_policies():
             self._publish_idle_state(current)
             self._publish_status()

@@ -13,7 +13,6 @@ from vex_policy.config.config_types import (
     WaistLocomotionGuardConfig,
     WaistLocomotionTaskConfig,
 )
-from vex_policy.inputs import ControlValues
 from vex_policy.policies.guard.waist_locomotion import WaistLocomotionGuard
 from vex_policy.policies.switch_mode import _policy_class
 from vex_policy.policies.waist_locomotion import WaistLocomotionPolicy, load_waist_motion_last_pose
@@ -123,7 +122,8 @@ def test_example_uses_specialized_parallel_policy_config():
 
     assert spec.implementation == "waist_locomotion"
     assert spec.type == "full_body"
-    assert spec.inputs == ("vx", "vy", "yaw", "pitch", "height")
+    assert [component.type for component in spec.inputs] == ["slider"] * 5
+    assert [parameter.name for parameter in spec.input_parameters] == ["amplitude", "frequency", "x", "y", "z"]
     assert isinstance(spec.task, WaistLocomotionTaskConfig)
     assert isinstance(spec.guard, WaistLocomotionGuardConfig)
     assert not hasattr(spec.task, "startup_joint_tolerance_rad")
@@ -150,7 +150,7 @@ def test_observation_contract_and_control_mapping(tmp_path):
     state = _matching_state(policy.config)
     state[0, 39:42] = [0.4, -0.8, 1.2]
     state[0, 42:71] = np.arange(29, dtype=np.float32)
-    policy.apply_control(ControlValues(vx=0.3, vy=0.4, yaw=-0.5, pitch=1.0, height=0.3))
+    policy.apply_control({"amplitude": 0.2, "frequency": 2.0, "x": 0.4, "y": -0.3, "z": 0.5})
 
     actor_obs = policy.prepare_obs_for_rl(state)["actor_obs"]
 
@@ -165,11 +165,11 @@ def test_observation_contract_and_control_mapping(tmp_path):
     assert np.allclose(actor_obs[0, 97:100], state[0, 71:74])
 
 
-def test_zero_control_uses_default_command_and_one_step_is_finite(tmp_path):
+def test_zero_direction_uses_default_command_and_one_step_is_finite(tmp_path):
     policy, interface = _build_policy(tmp_path)
 
     assert policy.activate() is None
-    policy.apply_control(ControlValues())
+    policy.apply_control({"amplitude": 0.125, "frequency": 1.1, "x": 0.0, "y": 0.0, "z": 0.0})
     policy.step()
 
     expected_phase = 2.0 * np.pi * 1.1 / 50.0

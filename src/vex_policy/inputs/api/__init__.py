@@ -1,3 +1,3 @@
-from .commands import ControlValues, VelCmd
+from .commands import VelCmd
 
-__all__ = ["ControlValues", "VelCmd"]
+__all__ = ["VelCmd"]

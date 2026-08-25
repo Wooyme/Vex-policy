@@ -6,13 +6,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .control import PolicyInput, input_parameters
 from .GuardConfig import GuardConfig, WaistLocomotionGuardConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
 from .task import SonicTaskConfig, TaskConfig, WaistLocomotionTaskConfig
 
 PolicyType = Literal["full_body", "lower_body", "upper_body"]
-PolicyInput = Literal["vx", "vy", "yaw", "pitch", "height"]
 
 
 class StrictModel(BaseModel):
@@ -63,6 +63,18 @@ class PolicySpec(StrictModel):
     task: TaskConfig | SonicTaskConfig | WaistLocomotionTaskConfig
     guard: GuardConfig | WaistLocomotionGuardConfig | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def select_task_type(cls, value):
+        if not isinstance(value, dict) or not isinstance(value.get("task"), dict):
+            return value
+        task_types = {
+            "sonic": SonicTaskConfig,
+            "waist_locomotion": WaistLocomotionTaskConfig,
+        }
+        task_type = task_types.get(value.get("implementation"), TaskConfig)
+        return {**value, "task": task_type(**value["task"])}
+
     @field_validator("name", "implementation")
     @classmethod
     def clean_name(cls, value: str) -> str:
@@ -73,9 +85,14 @@ class PolicySpec(StrictModel):
     @field_validator("inputs")
     @classmethod
     def unique_inputs(cls, value: tuple[PolicyInput, ...]) -> tuple[PolicyInput, ...]:
-        if len(set(value)) != len(value):
-            raise ValueError("inputs must not contain duplicates")
+        names = [parameter.name for parameter in input_parameters(value)]
+        if len(set(names)) != len(names):
+            raise ValueError("input parameter names must not contain duplicates")
         return value
+
+    @property
+    def input_parameters(self):
+        return input_parameters(self.inputs)
 
 
 def _validate_policy_set(policies: tuple[PolicySpec, ...]) -> None:

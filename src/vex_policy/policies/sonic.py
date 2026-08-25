@@ -5,13 +5,13 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
+from collections.abc import Mapping
 
 import numpy as np
 import onnxruntime
 from loguru import logger
 
 from vex_policy.config.config_types import InferenceConfig, SonicTaskConfig
-from vex_policy.inputs.api.commands import ControlValues
 from vex_policy.policies.base import BasePolicy
 from vex_policy.policies.sonic_motion import load_motion_directory
 from vex_policy.policies.sonic_planner import (
@@ -275,13 +275,13 @@ class SonicPolicy(BasePolicy):
         self._planner_thread = None
         self._planner_wakeup.clear()
 
-    def apply_control(self, control: ControlValues) -> None:
+    def apply_control(self, control: Mapping[str, float]) -> None:
         if self.sonic_task.motion_source == "directory":
             return
         # Preserve the repository's panel-to-robot convention: (vy, -vx, -yaw).
-        local = np.asarray([control.vy, -control.vx], dtype=np.float32)
+        local = np.asarray([control["vy"], -control["vx"]], dtype=np.float32)
         speed = float(np.linalg.norm(local))
-        self._desired_heading += float(-control.yaw) / self.rl_rate
+        self._desired_heading += float(-control["yaw"]) / self.rl_rate
         cosine = float(np.cos(self._desired_heading))
         sine = float(np.sin(self._desired_heading))
         facing = np.asarray([cosine, sine, 0.0], dtype=np.float32)
@@ -297,7 +297,7 @@ class SonicPolicy(BasePolicy):
         command = MovementCommand(
             mode=self.sonic_task.planner_mode,
             speed=speed,
-            height=float(control.height) if control.height > 0 else -1.0,
+            height=float(control["height"]) if control["height"] > 0 else -1.0,
             movement_direction=movement,
             facing_direction=facing,
         )

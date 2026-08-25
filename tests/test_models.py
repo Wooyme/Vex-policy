@@ -2,7 +2,6 @@ import numpy as np
 import pytest
 
 from vex_policy.config import load_runtime_config, resolve_policies
-from vex_policy.inputs import ControlValues
 from vex_policy.mqtt import CommandInbox
 from vex_policy.policies.locomotion import LocomotionPolicy
 from vex_policy.policies.sonic import SonicPolicy
@@ -68,7 +67,10 @@ def test_every_packaged_model_initializes_and_runs_one_step(index):
         interface.joint_positions = policy.default_dof_angles
         interface.projected_gravity = policy.initial_pose.projected_gravity
     policy.activate()
-    policy.apply_control(ControlValues(vx=0.1))
+    control = {parameter.name: parameter.default for parameter in resolved.spec.input_parameters}
+    if "vx" in control:
+        control["vx"] = 0.1
+    policy.apply_control(control)
     policy.step()
     assert len(interface.commands) == 1
     assert np.isfinite(policy.cmd_q).all()
@@ -92,7 +94,7 @@ def test_switch_manager_preloads_all_models_on_one_interface():
     runtime, path = load_runtime_config()
     resolved = resolve_policies(runtime, path)
     interface = FakeInterface(resolved[0].config.robot)
-    inbox = CommandInbox([item.spec.name for item in resolved])
+    inbox = CommandInbox({item.spec.name: item.spec for item in resolved})
     manager = SwitchModePolicy(
         runtime,
         resolved,

@@ -114,6 +114,61 @@ def test_nested_yaml_rejects_unknown_fields():
         PolicySpec.model_validate(data)
 
 
+def test_enhanced_inputs_preserve_component_order_and_parameter_metadata():
+    _, path = load_runtime_config()
+    data = yaml.safe_load((path / "ppo_locomotion.yaml").read_text(encoding="utf-8"))
+
+    spec = PolicySpec.model_validate(data)
+
+    assert [component.type for component in spec.inputs] == ["joystick", "slider"]
+    assert [parameter.name for parameter in spec.input_parameters] == ["vx", "vy", "yaw"]
+    assert [(parameter.min, parameter.max, parameter.default) for parameter in spec.input_parameters] == [
+        (-1.0, 1.0, 0.0),
+        (-1.0, 1.0, 0.0),
+        (-1.0, 1.0, 0.0),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("inputs", "message"),
+    [
+        (["vx"], "valid dictionary"),
+        (
+            [
+                {
+                    "type": "joystick",
+                    "x": {"name": "vx", "min": -1.0, "max": 1.0, "default": 0.0},
+                    "y": {"name": "vx", "min": -1.0, "max": 1.0, "default": 0.0},
+                }
+            ],
+            "different parameters",
+        ),
+        (
+            [{"type": "slider", "parameter": {"name": "height", "min": 1.0, "max": 1.0, "default": 1.0}}],
+            "min must be less",
+        ),
+        (
+            [{"type": "slider", "parameter": {"name": "height", "min": 0.0, "max": 1.0, "default": 2.0}}],
+            "default must be inside",
+        ),
+        (
+            [
+                {"type": "slider", "parameter": {"name": "height", "min": 0.0, "max": 1.0, "default": 0.0}},
+                {"type": "slider", "parameter": {"name": "height", "min": 0.0, "max": 1.0, "default": 0.0}},
+            ],
+            "must not contain duplicates",
+        ),
+    ],
+)
+def test_invalid_enhanced_inputs_are_rejected(inputs, message):
+    _, path = load_runtime_config()
+    data = yaml.safe_load((path / "ppo_locomotion.yaml").read_text(encoding="utf-8"))
+    data["inputs"] = inputs
+
+    with pytest.raises(ValueError, match=message):
+        PolicySpec.model_validate(data)
+
+
 def test_action_mask_path_is_relative_to_policy_yaml(tmp_path):
     _, default_path = load_runtime_config()
     data = yaml.safe_load((default_path / "ppo_locomotion.yaml").read_text(encoding="utf-8"))

@@ -4,7 +4,6 @@ from types import SimpleNamespace
 import numpy as np
 
 from vex_policy.config import ResolvedPolicy, load_runtime_config, resolve_policies
-from vex_policy.inputs import ControlValues
 from vex_policy.mqtt import CommandInbox
 from vex_policy.policies.base import PolicyJointCommand
 from vex_policy.policies.switch_mode import SwitchModePolicy
@@ -47,7 +46,7 @@ class FakePolicy:
         self.config = SimpleNamespace(task=SimpleNamespace())
         self.events = []
         self.steps = 0
-        self.control = ControlValues()
+        self.control = {}
         self.has_reference = has_reference
         self._on_command_sent = lambda *_: None
 
@@ -100,18 +99,19 @@ class FakeTransport:
         self.reference_states.append(json.loads(payload))
 
 
-def payload(seq, policy, *, estop=False):
+def payload(seq, policy, specs, *, estop=False):
+    inputs = {
+        name: {parameter.name: parameter.default for parameter in specs[name].input_parameters} for name in policy
+    }
+    for values in inputs.values():
+        values.update({name: value for name, value in {"vx": 0.4, "vy": 0.2, "yaw": -0.1}.items() if name in values})
     return json.dumps(
         {
             "seq": seq,
             "timestamp": 1,
             "control": {
-                "vx": 0.4,
-                "vy": 0.2,
-                "yaw": -0.1,
-                "pitch": 0.3,
-                "height": 0.0,
                 "policy": policy,
+                "inputs": inputs,
                 "estop": estop,
             },
         }
@@ -131,7 +131,7 @@ def make_runtime():
     def clock():
         return clock_value[0]
 
-    inbox = CommandInbox([item.spec.name for item in resolved], clock=clock)
+    inbox = CommandInbox({item.spec.name: item.spec for item in resolved}, clock=clock)
     interface = FakeInterface()
     instances = {item.spec.name: FakePolicy(interface, has_reference=item.kind == "wbt") for item in resolved}
     transport = FakeTransport()
@@ -153,22 +153,22 @@ def test_startup_rearm_switch_and_estop_latch_never_step_while_latched():
     assert manager.state == "startup_latched"
     assert sum(policy.steps for policy in policies.values()) == 0
 
-    assert inbox.accept(payload(1, []))
+    assert inbox.accept(payload(1, [], manager._specs))
     manager.tick()
     assert manager.state == "idle"
 
     now[0] = 0.01
-    assert inbox.accept(payload(2, [first]))
+    assert inbox.accept(payload(2, [first], manager._specs))
     manager.tick()
     assert manager.active_policy == (first,)
     assert policies[first].steps == 0
     manager.tick(now=0.02)
     assert policies[first].steps == 1
-    assert policies[first].control == ControlValues(vx=0.4, vy=0.2, yaw=-0.1)
+    assert policies[first].control == {"vx": 0.4, "vy": 0.2, "yaw": -0.1}
     assert manager.transport.reference_states == []
 
     now[0] = 0.03
-    assert inbox.accept(payload(3, [second]))
+    assert inbox.accept(payload(3, [second], manager._specs))
     manager.tick()
     assert policies[first].events[-1] == "deactivate"
     assert policies[second].steps == 0
@@ -179,22 +179,22 @@ def test_startup_rearm_switch_and_estop_latch_never_step_while_latched():
     assert manager.transport.reference_states[0]["timestamp"] == manager.transport.states[-1]["timestamp"]
 
     now[0] = 0.05
-    assert inbox.accept(payload(4, [second], estop=True))
+    assert inbox.accept(payload(4, [second], manager._specs, estop=True))
     manager.tick()
     assert manager.state == "latched"
     steps = policies[second].steps
     now[0] = 0.06
-    assert inbox.accept(payload(5, [second], estop=False))
+    assert inbox.accept(payload(5, [second], manager._specs, estop=False))
     manager.tick()
     assert manager.state == "latched"
     assert policies[second].steps == steps
 
     now[0] = 0.07
-    assert inbox.accept(payload(6, []))
+    assert inbox.accept(payload(6, [], manager._specs))
     manager.tick()
     assert manager.state == "idle"
     now[0] = 0.08
-    assert inbox.accept(payload(7, [first]))
+    assert inbox.accept(payload(7, [first], manager._specs))
     manager.tick()
     assert manager.active_policy == (first,)
 
@@ -202,10 +202,10 @@ def test_startup_rearm_switch_and_estop_latch_never_step_while_latched():
 def test_timeout_latches_and_requires_empty_rearm():
     manager, inbox, policies, now = make_runtime()
     first = next(iter(policies))
-    assert inbox.accept(payload(1, []))
+    assert inbox.accept(payload(1, [], manager._specs))
     manager.tick()
     now[0] = 0.1
-    assert inbox.accept(payload(2, [first]))
+    assert inbox.accept(payload(2, [first], manager._specs))
     manager.tick()
     manager.tick(now=0.2)
     steps = policies[first].steps
@@ -245,9 +245,9 @@ def test_lower_and_upper_policies_share_state_and_publish_one_merged_command():
         clock=lambda: 0.0,
     )
 
-    assert inbox.accept(payload(1, []))
+    assert inbox.accept(payload(1, [], manager._specs))
     manager.tick()
-    assert inbox.accept(payload(2, [upper.spec.name, lower.spec.name]))
+    assert inbox.accept(payload(2, [upper.spec.name, lower.spec.name], manager._specs))
     manager.tick()
     reads_before = interface.reads
     manager.tick()

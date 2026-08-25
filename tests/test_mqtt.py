@@ -6,18 +6,18 @@ from vex_policy.config import load_runtime_config
 from vex_policy.mqtt import CommandInbox, encode_robot_state, parse_broker
 
 
-def packet(*, policy=None, estop=False, vx=0.5):
+def default_inputs(*specs):
+    return {spec.name: {parameter.name: parameter.default for parameter in spec.input_parameters} for spec in specs}
+
+
+def packet(*, policy=None, inputs=None, estop=False, seq=7):
     return json.dumps(
         {
-            "seq": 7,
+            "seq": seq,
             "timestamp": 1_750_000_000_000,
             "control": {
-                "vx": vx,
-                "vy": -0.2,
-                "yaw": 0.1,
-                "pitch": 0.0,
-                "height": 0.0,
                 "policy": [] if policy is None else policy,
+                "inputs": {} if inputs is None else inputs,
                 "estop": estop,
             },
         }
@@ -25,14 +25,22 @@ def packet(*, policy=None, estop=False, vx=0.5):
 
 
 def test_inbox_accepts_only_strict_known_policies():
-    inbox = CommandInbox(["walk"], clock=lambda: 12.5)
-    assert inbox.accept(packet(policy=["walk"]))
+    runtime, _ = load_runtime_config()
+    walk = next(policy for policy in runtime.policies if policy.implementation == "locomotion")
+    values = default_inputs(walk)
+    values[walk.name].update({"vx": 0.5, "vy": -0.2, "yaw": 0.1})
+    inbox = CommandInbox({walk.name: walk}, clock=lambda: 12.5)
+
+    assert inbox.accept(packet(policy=[walk.name], inputs=values))
     assert inbox.snapshot().received_at == 12.5
-    assert inbox.snapshot().packet.control.vx == 0.5
-    assert not inbox.accept(packet(policy=["missing"]))
-    assert not inbox.accept(packet(policy=["walk", "missing"]))
-    assert not inbox.accept(packet(policy=["walk"], vx=2.0))
-    assert inbox.invalid_messages == 3
+    assert inbox.snapshot().packet.control.inputs[walk.name]["vx"] == 0.5
+    assert not inbox.accept(packet(policy=["missing"], inputs={"missing": {}}))
+    assert not inbox.accept(packet(policy=[walk.name, "missing"], inputs=values | {"missing": {}}))
+    values[walk.name]["vx"] = 2.0
+    assert not inbox.accept(packet(policy=[walk.name], inputs=values, seq=8))
+    values[walk.name]["vx"] = float("nan")
+    assert not inbox.accept(packet(policy=[walk.name], inputs=values, seq=9))
+    assert inbox.invalid_messages == 4
     assert inbox.snapshot().packet.seq == 7
 
 
@@ -43,21 +51,30 @@ def test_inbox_accepts_lower_upper_pair_and_rejects_invalid_compositions():
     upper = lower.model_copy(update={"name": "arms", "type": "upper_body"})
     inbox = CommandInbox({policy.name: policy for policy in (lower, upper, full)})
 
-    assert inbox.accept(packet(policy=[upper.name, lower.name]))
-    assert not inbox.accept(packet(policy=[full.name, lower.name]))
-    assert not inbox.accept(packet(policy=[lower.name, lower.name]))
-    assert not inbox.accept(packet(policy=[lower.name, upper.name, full.name]))
+    assert inbox.accept(packet(policy=[upper.name, lower.name], inputs=default_inputs(upper, lower)))
+    assert not inbox.accept(packet(policy=[full.name, lower.name], inputs=default_inputs(full, lower)))
+    assert not inbox.accept(packet(policy=[lower.name, lower.name], inputs=default_inputs(lower)))
+    assert not inbox.accept(
+        packet(policy=[lower.name, upper.name, full.name], inputs=default_inputs(lower, upper, full))
+    )
 
 
-def test_accepted_input_filter_zeros_unadvertised_fields():
-    inbox = CommandInbox(["walk"])
-    assert inbox.accept(packet(policy=["walk"]))
-    control = inbox.snapshot().packet.control.values_for(["vx", "yaw"])
-    assert control.vx == 0.5
-    assert control.vy == 0.0
-    assert control.yaw == 0.1
-    assert control.pitch == 0.0
-    assert control.height == 0.0
+def test_inputs_must_exactly_match_selected_policy_and_parameter_schema():
+    runtime, _ = load_runtime_config()
+    walk = next(policy for policy in runtime.policies if policy.implementation == "locomotion")
+    inbox = CommandInbox({walk.name: walk})
+    valid = default_inputs(walk)
+
+    assert inbox.accept(packet(policy=[walk.name], inputs=valid))
+    valid[walk.name]["vx"] = -1.0
+    valid[walk.name]["vy"] = 1.0
+    assert inbox.accept(packet(policy=[walk.name], inputs=valid))
+    assert not inbox.accept(packet(policy=[walk.name], inputs={}))
+    assert not inbox.accept(packet(policy=[], inputs=valid))
+    assert not inbox.accept(packet(policy=[walk.name], inputs={walk.name: {"vx": 0.0}}))
+    extra = default_inputs(walk)
+    extra[walk.name]["extra"] = 0.0
+    assert not inbox.accept(packet(policy=[walk.name], inputs=extra))
 
 
 def test_state_encoder_matches_simulator_shape():

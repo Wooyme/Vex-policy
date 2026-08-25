@@ -3,11 +3,11 @@ import shutil
 import socket
 import subprocess
 import time
-from types import SimpleNamespace
 
 import paho.mqtt.client as mqtt
 import pytest
 
+from vex_policy.config import load_runtime_config
 from vex_policy.config.config_types import MqttConfig
 from vex_policy.mqtt import CommandInbox, MqttTransport
 
@@ -47,8 +47,9 @@ def test_real_broker_round_trip_and_retained_outputs(tmp_path):
         stderr=subprocess.DEVNULL,
     )
     config = MqttConfig(broker=f"mqtt://127.0.0.1:{port}", connect_timeout_s=2)
-    policy = SimpleNamespace(name="walk", type="full_body", inputs=("vx",))
-    inbox = CommandInbox(["walk"])
+    runtime, _ = load_runtime_config()
+    policy = next(policy for policy in runtime.policies if policy.implementation == "locomotion")
+    inbox = CommandInbox({policy.name: policy})
     transport = MqttTransport(config, (policy,), inbox)
     received = {}
     observer = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -65,7 +66,13 @@ def test_real_broker_round_trip_and_retained_outputs(tmp_path):
         observer.subscribe("robot/#")
         observer.loop_start()
         wait_until(lambda: config.policies_topic in received)
-        assert json.loads(received[config.policies_topic]) == [{"name": "walk", "type": "full_body", "inputs": ["vx"]}]
+        assert json.loads(received[config.policies_topic]) == [
+            {
+                "name": policy.name,
+                "type": policy.type,
+                "inputs": [component.model_dump(mode="json") for component in policy.inputs],
+            }
+        ]
 
         observer.publish(
             config.command_topic,
@@ -74,12 +81,14 @@ def test_real_broker_round_trip_and_retained_outputs(tmp_path):
                     "seq": 1,
                     "timestamp": 1,
                     "control": {
-                        "vx": 0.2,
-                        "vy": 0.0,
-                        "yaw": 0.0,
-                        "pitch": 0.0,
-                        "height": 0.0,
-                        "policy": ["walk"],
+                        "policy": [policy.name],
+                        "inputs": {
+                            policy.name: {
+                                "vx": 0.2,
+                                "vy": 0.0,
+                                "yaw": 0.0,
+                            }
+                        },
                         "estop": False,
                     },
                 }
@@ -89,8 +98,8 @@ def test_real_broker_round_trip_and_retained_outputs(tmp_path):
         transport.publish_status(
             {
                 "state": "running",
-                "active_policy": ["walk"],
-                "requested_policy": ["walk"],
+                "active_policy": [policy.name],
+                "requested_policy": [policy.name],
                 "reason": None,
                 "last_command_seq": 1,
             }

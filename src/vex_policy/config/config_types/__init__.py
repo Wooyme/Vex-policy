@@ -1,13 +1,13 @@
 """Type definitions for vex_policy configuration system."""
 
 from .action_mask import ActionMaskConfig
+from .control import InputParameter, JoystickInput, PolicyInput, SliderInput, input_parameters
 from .GuardConfig import GuardConfig, WaistLocomotionGuardConfig
 from .inference import InferenceConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
 from .runtime import (
     MqttConfig,
-    PolicyInput,
     PolicySpec,
     PolicyType,
     RobotRuntimeConfig,
@@ -20,6 +20,8 @@ __all__ = [
     "DebugConfig",
     "GuardConfig",
     "InferenceConfig",
+    "InputParameter",
+    "JoystickInput",
     "MqttConfig",
     "ObservationConfig",
     "PolicyInput",
@@ -28,8 +30,10 @@ __all__ = [
     "RobotConfig",
     "RobotRuntimeConfig",
     "RuntimeConfig",
+    "SliderInput",
     "SonicTaskConfig",
     "TaskConfig",
     "WaistLocomotionGuardConfig",
     "WaistLocomotionTaskConfig",
+    "input_parameters",
 ]

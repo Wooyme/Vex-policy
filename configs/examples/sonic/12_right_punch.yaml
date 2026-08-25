@@ -1,7 +1,14 @@
 name: g1-sonic-right-punch
 implementation: sonic
 type: full_body
-inputs: [vx, vy, yaw, height]
+inputs:
+- type: joystick
+  x: {name: vx, min: -1.0, max: 1.0, default: 0.0}
+  y: {name: vy, min: -1.0, max: 1.0, default: 0.0}
+- type: slider
+  parameter: {name: yaw, min: -1.0, max: 1.0, default: 0.0}
+- type: slider
+  parameter: {name: height, min: 0.0, max: 0.75, default: 0.0}
 observation:
   obs_dict:
     actor_obs:

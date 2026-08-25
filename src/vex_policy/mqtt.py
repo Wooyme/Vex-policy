@@ -10,7 +10,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import unquote, urlsplit
 
 import numpy as np
@@ -18,18 +18,15 @@ import paho.mqtt.client as mqtt
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from vex_policy.config.config_types import MqttConfig, PolicySpec
-from vex_policy.inputs import ControlValues
+
+InputValue = Annotated[float, Field(allow_inf_nan=False)]
 
 
 class CommandControl(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    vx: float = Field(ge=-1.0, le=1.0)
-    vy: float = Field(ge=-1.0, le=1.0)
-    yaw: float = Field(ge=-1.0, le=1.0)
-    pitch: float = Field(ge=-1.0, le=1.0)
-    height: float = Field(ge=0.0, le=0.75)
     policy: tuple[str, ...]
+    inputs: dict[str, dict[str, InputValue]]
     estop: bool
 
     @field_validator("policy")
@@ -40,16 +37,6 @@ class CommandControl(BaseModel):
         if len(set(value)) != len(value):
             raise ValueError("policy names must not repeat")
         return value
-
-    def values_for(self, accepted: Iterable[str]) -> ControlValues:
-        allowed = set(accepted)
-        return ControlValues(
-            vx=self.vx if "vx" in allowed else 0.0,
-            vy=self.vy if "vy" in allowed else 0.0,
-            yaw=self.yaw if "yaw" in allowed else 0.0,
-            pitch=self.pitch if "pitch" in allowed else 0.0,
-            height=self.height if "height" in allowed else 0.0,
-        )
 
 
 class ControlPacket(BaseModel):
@@ -71,10 +58,10 @@ class CommandInbox:
 
     def __init__(
         self,
-        policies: Iterable[str] | dict[str, PolicySpec],
+        policies: dict[str, PolicySpec],
         clock: Callable[[], float] = time.monotonic,
     ):
-        self._policy_specs = dict(policies) if isinstance(policies, dict) else None
+        self._policy_specs = dict(policies)
         self._policy_names = frozenset(policies)
         self._clock = clock
         self._lock = threading.Lock()
@@ -87,13 +74,23 @@ class CommandInbox:
             unknown = set(packet.control.policy) - self._policy_names
             if unknown:
                 raise ValueError(f"unknown policies: {sorted(unknown)}")
-            if self._policy_specs is not None:
-                selected = [self._policy_specs[name] for name in packet.control.policy]
-                types = [policy.type for policy in selected]
-                if "full_body" in types and len(types) > 1:
-                    raise ValueError("full_body policies must run alone")
-                if len(types) != len(set(types)):
-                    raise ValueError("only one policy of each body type may be active")
+            selected = [self._policy_specs[name] for name in packet.control.policy]
+            types = [policy.type for policy in selected]
+            if "full_body" in types and len(types) > 1:
+                raise ValueError("full_body policies must run alone")
+            if len(types) != len(set(types)):
+                raise ValueError("only one policy of each body type may be active")
+            if set(packet.control.inputs) != set(packet.control.policy):
+                raise ValueError("control input policy names must exactly match selected policies")
+            for spec in selected:
+                values = packet.control.inputs[spec.name]
+                parameters = {parameter.name: parameter for parameter in spec.input_parameters}
+                if set(values) != set(parameters):
+                    raise ValueError(f"control inputs for {spec.name!r} must exactly match its parameters")
+                for name, value in values.items():
+                    parameter = parameters[name]
+                    if not parameter.min <= value <= parameter.max:
+                        raise ValueError(f"control input {spec.name}.{name} is outside its configured range")
         except (ValueError, TypeError):
             with self._lock:
                 self.invalid_messages += 1
@@ -227,7 +224,14 @@ class MqttTransport:
             self.inbox.accept(message.payload)
 
     def publish_policies(self) -> None:
-        payload = [{"name": p.name, "type": p.type, "inputs": list(p.inputs)} for p in self.policies]
+        payload = [
+            {
+                "name": policy.name,
+                "type": policy.type,
+                "inputs": [component.model_dump(mode="json") for component in policy.inputs],
+            }
+            for policy in self.policies
+        ]
         self._client.publish(self.config.policies_topic, self._json(payload), qos=1, retain=True)
 
     def publish_status(self, payload: dict[str, Any]) -> None:

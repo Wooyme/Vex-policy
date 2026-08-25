@@ -94,7 +94,12 @@ CLI 中 `--config` 与 `--policy-config` 等价，可传一个目录加载其中
 name: my-locomotion
 implementation: locomotion
 type: lower_body
-inputs: [vx, vy, yaw]
+inputs:
+- type: joystick
+  x: {name: vx, min: -1.0, max: 1.0, default: 0.0}
+  y: {name: vy, min: -1.0, max: 1.0, default: 0.0}
+- type: slider
+  parameter: {name: yaw, min: -1.0, max: 1.0, default: 0.0}
 observation: # 在单个文件中声明完整 ObservationConfig
   # 完整 obs_dict、obs_dims、obs_scales、history_length_dict
 task:
@@ -117,11 +122,27 @@ Holosoma `waist_loco` 分支的 pelvis-sine 策略使用独立示例
 是否接近该帧。motion 必须包含带根姿态的 `joint_pos` 和可用于关节重排的 `joint_names`。启动检查由独立的
 `WaistLocomotionGuard` 执行，其关节和重力误差阈值配置在 policy YAML 顶层的 `guard` 中。
 
-waist locomotion 复用现有五个控制字段：`height=0` 使用默认 `0.125 m` 振幅，非零值作为米并裁剪到
-`[0.05, 0.20]`；`pitch` 从 `[-1,1]` 映射到 `[0.2,2.0] Hz`；`[vy,-vx,-yaw]` 归一化为局部 XYZ
-运动方向，全零方向回退到 `[1,0,0]`。waist locomotion 的 `motion_data_path` 与 `model_path` 一样相对
-进程当前工作目录解析。pelvis command 开头的 `sin_phase`/`cos_phase` 由策略按当前频率和 `rl_rate`
-内部推进，不占用额外 MQTT 字段。
+waist locomotion 将五个真实物理量分别声明为滑条：`amplitude` 范围 `[0.05,0.20]`、默认 `0.125`，
+`frequency` 范围 `[0.2,2.0]`、默认 `1.1`，方向 `x/y/z` 范围均为 `[-1,1]`、默认
+`[1,0,0]`。方向在策略内归一化，全零方向回退到配置的默认方向。这些范围和默认值只在 `inputs` 中
+配置，不在 task 中重复。waist locomotion 的 `motion_data_path` 与 `model_path` 一样相对进程当前工作目录
+解析。pelvis command 开头的 `sin_phase`/`cos_phase` 由策略按当前频率和 `rl_rate` 内部推进，不占用额外
+MQTT 参数。
+
+## Enhanced inputs
+
+每个 policy 的 `inputs` 是有序的 UI 组件数组，控制面板按 `type` 自动渲染。`joystick` 同时声明明确的
+`x`、`y` 参数，`slider` 声明一个 `parameter`；每个参数都包含唯一的 `name`、闭区间 `min/max` 和
+`default`。范围、默认值和参数名在加载阶段严格校验。没有手动输入的 policy 使用 `inputs: []`。
+
+```yaml
+inputs:
+- type: joystick
+  x: {name: vx, min: -1.0, max: 1.0, default: 0.0}
+  y: {name: vy, min: -1.0, max: 1.0, default: 0.0}
+- type: slider
+  parameter: {name: yaw, min: -1.0, max: 1.0, default: 0.0}
+```
 
 ## MQTT 协议
 
@@ -132,23 +153,28 @@ waist locomotion 复用现有五个控制字段：`height=0` 使用默认 `0.125
   "seq": 1,
   "timestamp": 1750000000000,
   "control": {
-    "vx": 0.25,
-    "vy": 0.0,
-    "yaw": -0.1,
-    "pitch": 0.0,
-    "height": 0.0,
-    "policy": ["g1-ppo-locomotion", "my-upper-body-policy"],
+    "policy": ["g1-ppo-locomotion"],
+    "inputs": {
+      "g1-ppo-locomotion": {
+        "vx": 0.25,
+        "vy": 0.0,
+        "yaw": -0.1
+      }
+    },
     "estop": false
   }
 }
 ```
 
 policy 数组可为空、包含一个 policy，或同时包含一个 `lower_body` 和一个 `upper_body` policy。`full_body`
-必须独占；重复类型、未知名称和超过两个 policy 的消息会被丢弃且不会刷新 watchdog。默认 1 秒没有合法消息即锁存。
+必须独占。`inputs` 必须按 policy 名分组，其键与所选 policy 精确一致；每组必须提供该 policy 声明的全部
+参数且不得包含额外参数，数值必须在声明的闭区间内。空 policy 必须搭配空 inputs。重复类型、未知名称、
+参数不完整、越界和超过两个 policy 的消息都会被丢弃且不会刷新 watchdog。默认 1 秒没有合法消息即锁存。
 
 输出 topics：
 
-- `robot/policies`：QoS 1、retained，面板使用的直接 JSON 数组。
+- `robot/policies`：QoS 1、retained，面板使用的直接 JSON 数组；每项包含 `name`、`type` 和完整 enhanced
+  inputs 组件描述。
 - `robot/status`：QoS 1、retained，字段为 `state`、数组类型的 `active_policy`/`requested_policy`、`reason`、`last_command_seq`；配置了 offline Last Will。
 - `robot/g1/real/state`：QoS 0、非 retained、默认 50 Hz；字段与 `../sim/g1_mujoco_sim/mqtt.py` 完全一致：`timestamp`、`simulation_time`、`joint_names`、`joint_values`、`base_xyz`、`base_quat_wxyz`。
 - `robot/g1/reference/state`：仅在单个、可提供参考状态的 policy 激活时发布；组合策略运行时不发布。QoS 0、非 retained、与真实状态同频且使用相同字段结构。

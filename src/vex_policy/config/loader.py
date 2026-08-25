@@ -122,7 +122,14 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             resolved_paths["motion_data_path"] = str(motion_data_path)
         task = replace(spec.task, **resolved_paths)
         action_mask = _load_action_mask(spec, runtime.robot.config)
-        policy_config = InferenceConfig(runtime.robot.config, spec.observation, task, spec.guard, action_mask)
+        policy_config = InferenceConfig(
+            runtime.robot.config,
+            spec.inputs,
+            spec.observation,
+            task,
+            spec.guard,
+            action_mask,
+        )
         rates.add(policy_config.task.rl_rate)
         resolved.append(ResolvedPolicy(spec, policy_config, spec.implementation))
 

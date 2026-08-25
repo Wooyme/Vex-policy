@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from collections import deque
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from termcolor import colored
 
 from vex_policy.config.config_types.inference import InferenceConfig
 from vex_policy.config.config_types.robot import RobotConfig
-from vex_policy.inputs.api.commands import ControlValues, VelCmd
+from vex_policy.inputs.api.commands import VelCmd
 from vex_policy.sdk import create_interface
 from vex_policy.utils.latency import LatencyTracker
 from vex_policy.utils.math.quat import quat_rotate_inverse
@@ -689,9 +690,11 @@ class BasePolicy:
         self.lin_vel_command[0] = vc.lin_vel
         self.ang_vel_command[0, 0] = vc.ang_vel
 
-    def apply_control(self, control: ControlValues) -> None:
+    def apply_control(self, control: Mapping[str, float]) -> None:
         """Apply the MQTT control fields understood by core policies."""
-        self._apply_velocity(VelCmd((control.vy, -control.vx), -control.yaw))
+        if not control:
+            return
+        self._apply_velocity(VelCmd((control["vy"], -control["vx"]), -control["yaw"]))
 
     # ============================================================================
     # Control Action Methods

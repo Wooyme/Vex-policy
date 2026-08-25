@@ -1,5 +1,5 @@
-"""MQTT-only control value types."""
+"""Policy control command helpers."""
 
-from .api.commands import ControlValues, VelCmd
+from .api.commands import VelCmd
 
-__all__ = ["ControlValues", "VelCmd"]
+__all__ = ["VelCmd"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import ClassVar
 
@@ -12,10 +13,11 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from vex_policy.config.config_types import (
     InferenceConfig,
+    SliderInput,
     WaistLocomotionGuardConfig,
     WaistLocomotionTaskConfig,
+    input_parameters,
 )
-from vex_policy.inputs.api.commands import ControlValues
 from vex_policy.policies.guard.waist_locomotion import WaistLocomotionGuard
 from vex_policy.utils.math.quat import quat_rotate_inverse
 
@@ -108,6 +110,20 @@ class WaistLocomotionPolicy(BasePolicy):
             raise TypeError("WaistLocomotionPolicy requires WaistLocomotionTaskConfig")
         if not isinstance(config.guard, WaistLocomotionGuardConfig):
             raise TypeError("WaistLocomotionPolicy requires WaistLocomotionGuardConfig")
+        if not all(isinstance(component, SliderInput) for component in config.inputs):
+            raise ValueError("Waist locomotion inputs must contain only sliders")
+        parameters = {parameter.name: parameter for parameter in input_parameters(config.inputs)}
+        expected_parameters = {"amplitude", "frequency", "x", "y", "z"}
+        if set(parameters) != expected_parameters:
+            raise ValueError(f"Waist locomotion inputs must be {sorted(expected_parameters)}")
+        if parameters["amplitude"].min <= 0.0 or parameters["frequency"].min <= 0.0:
+            raise ValueError("Waist locomotion amplitude and frequency ranges must be positive")
+        default_direction = np.asarray(
+            [parameters[name].default for name in ("x", "y", "z")], dtype=np.float32
+        )
+        if np.linalg.norm(default_direction) < 1e-8:
+            raise ValueError("Waist locomotion default direction must be non-zero")
+        self.waist_input_parameters = parameters
         self.waist_task = config.task
         self.initial_pose = load_waist_motion_last_pose(self.waist_task.motion_data_path)
         super().__init__(config)
@@ -181,14 +197,16 @@ class WaistLocomotionPolicy(BasePolicy):
 
     def _reset_pelvis_sine_command(self) -> None:
         self.pelvis_sine_phase = 0.0
-        direction = np.asarray(self.waist_task.default_direction, dtype=np.float32)
+        direction = np.asarray(
+            [self.waist_input_parameters[name].default for name in ("x", "y", "z")],
+            dtype=np.float32,
+        )
         direction /= np.linalg.norm(direction)
-        frequency_min, frequency_max = self.waist_task.frequency_range_hz
         self.pelvis_sine_command[0] = (
             0.0,
             1.0,
-            self.waist_task.default_amplitude_m,
-            0.5 * (frequency_min + frequency_max),
+            self.waist_input_parameters["amplitude"].default,
+            self.waist_input_parameters["frequency"].default,
             *direction,
         )
 
@@ -203,22 +221,16 @@ class WaistLocomotionPolicy(BasePolicy):
         self.pelvis_sine_command[0, 0] = np.sin(self.pelvis_sine_phase)
         self.pelvis_sine_command[0, 1] = np.cos(self.pelvis_sine_phase)
 
-    def apply_control(self, control: ControlValues) -> None:
-        amplitude_min, amplitude_max = self.waist_task.amplitude_range_m
-        amplitude = (
-            self.waist_task.default_amplitude_m
-            if control.height == 0.0
-            else float(np.clip(control.height, amplitude_min, amplitude_max))
-        )
-
-        frequency_min, frequency_max = self.waist_task.frequency_range_hz
-        normalized_pitch = float(np.clip(control.pitch, -1.0, 1.0))
-        frequency = frequency_min + 0.5 * (normalized_pitch + 1.0) * (frequency_max - frequency_min)
-
-        direction = np.asarray([control.vy, -control.vx, -control.yaw], dtype=np.float32)
+    def apply_control(self, control: Mapping[str, float]) -> None:
+        amplitude = float(control["amplitude"])
+        frequency = float(control["frequency"])
+        direction = np.asarray([control["x"], control["y"], control["z"]], dtype=np.float32)
         direction_norm = float(np.linalg.norm(direction))
         if direction_norm < 1e-8:
-            direction = np.asarray(self.waist_task.default_direction, dtype=np.float32)
+            direction = np.asarray(
+                [self.waist_input_parameters[name].default for name in ("x", "y", "z")],
+                dtype=np.float32,
+            )
             direction_norm = float(np.linalg.norm(direction))
         direction /= direction_norm
         self.pelvis_sine_command[0, 2:] = (amplitude, frequency, *direction)
