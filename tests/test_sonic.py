@@ -53,7 +53,7 @@ def _write_reference_motion(motion_directory: Path, frames: int = 6) -> tuple[np
 
 
 def test_all_sonic_mode_configs_keep_current_yaml_shape():
-    paths = sorted(Path("configs/g1/sonic").glob("*.yaml"))
+    paths = sorted(Path("configs/examples/sonic").glob("*.yaml"))
     assert len(paths) == 27
     for expected_mode, path in enumerate(paths):
         data = yaml.safe_load(path.read_text(encoding="utf-8"))

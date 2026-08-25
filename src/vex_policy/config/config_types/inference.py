@@ -4,16 +4,16 @@ from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
 from .action_mask import ActionMaskConfig
-from .GuardConfig import GuardConfig
+from .GuardConfig import GuardConfig, WaistLocomotionGuardConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
-from .task import SonicTaskConfig, TaskConfig
+from .task import SonicTaskConfig, TaskConfig, WaistLocomotionTaskConfig
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class InferenceConfig:
     robot: RobotConfig
     observation: ObservationConfig
-    task: TaskConfig | SonicTaskConfig
-    guard: GuardConfig | None = None
+    task: TaskConfig | SonicTaskConfig | WaistLocomotionTaskConfig
+    guard: GuardConfig | WaistLocomotionGuardConfig | None = None
     action_mask: ActionMaskConfig | None = None

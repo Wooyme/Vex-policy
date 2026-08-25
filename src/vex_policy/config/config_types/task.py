@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Literal
 
 from pydantic import ConfigDict, Field
@@ -63,3 +64,30 @@ class SonicTaskConfig(TaskConfig):
     planner_seed: int = 1234
     planner_default_height: float = 0.78874
     planner_encoder_mode: Literal[0] = 0
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class WaistLocomotionTaskConfig(TaskConfig):
+    """Pelvis-sine waist locomotion command and startup configuration."""
+
+    default_amplitude_m: float = 0.125
+    amplitude_range_m: tuple[float, float] = (0.05, 0.20)
+    frequency_range_hz: tuple[float, float] = (0.2, 2.0)
+    default_direction: tuple[float, float, float] = (1.0, 0.0, 0.0)
+
+    def __post_init__(self) -> None:
+        amplitude_min, amplitude_max = self.amplitude_range_m
+        frequency_min, frequency_max = self.frequency_range_hz
+        if not self.motion_data_path or not self.motion_data_path.strip():
+            raise ValueError("motion_data_path must not be empty")
+        if not all(math.isfinite(value) for value in (*self.amplitude_range_m, self.default_amplitude_m)):
+            raise ValueError("amplitude values must be finite")
+        if not 0.0 < amplitude_min <= self.default_amplitude_m <= amplitude_max:
+            raise ValueError("default_amplitude_m must be inside the positive amplitude_range_m")
+        if not all(math.isfinite(value) for value in self.frequency_range_hz):
+            raise ValueError("frequency_range_hz must be finite")
+        if not 0.0 < frequency_min < frequency_max:
+            raise ValueError("frequency_range_hz must be positive and increasing")
+        direction_norm = math.sqrt(sum(value * value for value in self.default_direction))
+        if not math.isfinite(direction_norm) or direction_norm < 1e-8:
+            raise ValueError("default_direction must be finite and non-zero")

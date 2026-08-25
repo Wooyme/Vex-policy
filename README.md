@@ -48,7 +48,7 @@ uv run vex-policy \
 
 ## GEAR-SONIC
 
-SONIC 配置位于 `configs/g1/sonic/`，每个 planner mode 都是一个完整且独立的现有格式 YAML。该子目录不会被默认的 `configs/g1` 非递归加载影响。
+SONIC 配置位于 `configs/examples/sonic/`，每个 planner mode 都是一个完整且独立的现有格式 YAML。该子目录不会被默认的 `configs/g1` 非递归加载影响。
 
 先将上游三个模型放到 `models/sonic/`：
 
@@ -108,6 +108,20 @@ task:
 `masked_joints` 列出需要置零的 residual action。仓库提供 `disable_upper_body.yaml`（双臂 14 个关节）和
 `disable_lower_body.yaml`（双腿与腰部 15 个关节）。屏蔽维单独运行时保持 `default_dof_angles`，组合运行时
 不会写入合成命令，因此可由另一身体区域的策略接管。`lower_body`/`upper_body` 的未屏蔽关节不得越过各自区域。
+
+Holosoma `waist_loco` 分支的 pelvis-sine 策略使用独立示例
+`configs/examples/g1_waist_locomotion.yaml`。将对应的 100→29 ONNX 模型复制为
+`models/loco/g1_29dof/ppo_g1_waist.onnx` 后，可通过
+`vex-policy --config configs/examples/g1_waist_locomotion.yaml` 单独启动。该策略保留模型的全 29 维输出，
+并使用 `motion_data_path` 所指 NPZ motion 的最后一帧作为关节残差零位；激活前会检查当前关节和机身倾斜
+是否接近该帧。motion 必须包含带根姿态的 `joint_pos` 和可用于关节重排的 `joint_names`。启动检查由独立的
+`WaistLocomotionGuard` 执行，其关节和重力误差阈值配置在 policy YAML 顶层的 `guard` 中。
+
+waist locomotion 复用现有五个控制字段：`height=0` 使用默认 `0.125 m` 振幅，非零值作为米并裁剪到
+`[0.05, 0.20]`；`pitch` 从 `[-1,1]` 映射到 `[0.2,2.0] Hz`；`[vy,-vx,-yaw]` 归一化为局部 XYZ
+运动方向，全零方向回退到 `[1,0,0]`。waist locomotion 的 `motion_data_path` 与 `model_path` 一样相对
+进程当前工作目录解析。pelvis command 开头的 `sin_phase`/`cos_phase` 由策略按当前频率和 `rl_rate`
+内部推进，不占用额外 MQTT 字段。
 
 ## MQTT 协议
 

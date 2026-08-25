@@ -7,6 +7,7 @@ from vex_policy.mqtt import CommandInbox
 from vex_policy.policies.locomotion import LocomotionPolicy
 from vex_policy.policies.sonic import SonicPolicy
 from vex_policy.policies.switch_mode import SwitchModePolicy
+from vex_policy.policies.waist_locomotion import WaistLocomotionPolicy
 from vex_policy.policies.wbt import WholeBodyTrackingPolicy
 
 
@@ -16,6 +17,8 @@ class FakeInterface:
         self.commands = []
         self.kp_level = 1.0
         self.kd_level = 1.0
+        self.joint_positions = None
+        self.projected_gravity = None
 
     def update_config(self, config):
         self.robot_config = config
@@ -24,7 +27,10 @@ class FakeInterface:
         count = self.robot_config.num_joints
         state = np.zeros((1, 3 + 4 + count + 3 + 3 + count), dtype=np.float32)
         state[0, 3] = 1.0
-        state[0, 7 : 7 + count] = self.robot_config.default_dof_angles
+        joint_positions = self.robot_config.default_dof_angles if self.joint_positions is None else self.joint_positions
+        state[0, 7 : 7 + count] = joint_positions
+        if self.projected_gravity is not None:
+            state = np.concatenate([state, np.asarray(self.projected_gravity, dtype=np.float32).reshape(1, 3)], axis=1)
         return state
 
     def send_low_command(self, *args, **kwargs):
@@ -42,7 +48,7 @@ class NullTransport:
         del payload
 
 
-@pytest.mark.parametrize("index", range(6))
+@pytest.mark.parametrize("index", range(7))
 def test_every_packaged_model_initializes_and_runs_one_step(index):
     runtime, path = load_runtime_config()
     resolved = resolve_policies(runtime, path)[index]
@@ -50,6 +56,7 @@ def test_every_packaged_model_initializes_and_runs_one_step(index):
     cls = {
         "locomotion": LocomotionPolicy,
         "sonic": SonicPolicy,
+        "waist_locomotion": WaistLocomotionPolicy,
         "wbt": WholeBodyTrackingPolicy,
     }[resolved.kind]
     interface = FakeInterface(config.robot)
@@ -57,6 +64,9 @@ def test_every_packaged_model_initializes_and_runs_one_step(index):
     policy._injected_interface = interface
     cls.__init__(policy, config)
     policy._on_command_sent = lambda *_: None
+    if resolved.kind == "waist_locomotion":
+        interface.joint_positions = policy.default_dof_angles
+        interface.projected_gravity = policy.initial_pose.projected_gravity
     policy.activate()
     policy.apply_control(ControlValues(vx=0.1))
     policy.step()

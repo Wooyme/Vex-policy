@@ -15,6 +15,8 @@ from vex_policy.config.config_types import (
     RobotRuntimeConfig,
     RuntimeConfig,
     SonicTaskConfig,
+    WaistLocomotionGuardConfig,
+    WaistLocomotionTaskConfig,
 )
 from vex_policy.robots import G1_29DOF
 
@@ -52,12 +54,14 @@ def load_runtime_config(
     for policy_path in policy_paths:
         with policy_path.open(encoding="utf-8") as stream:
             spec = PolicySpec.model_validate(yaml.safe_load(stream))
+        resolved_task_paths: dict[str, str] = {}
         if spec.task.action_mask_path:
             mask_path = Path(spec.task.action_mask_path).expanduser()
             if not mask_path.is_absolute():
                 mask_path = policy_path.parent / mask_path
-            mask_path = mask_path.resolve()
-            task = replace(spec.task, action_mask_path=str(mask_path))
+            resolved_task_paths["action_mask_path"] = str(mask_path.resolve())
+        if resolved_task_paths:
+            task = replace(spec.task, **resolved_task_paths)
             spec = spec.model_copy(update={"task": task})
         policies.append(spec)
 
@@ -84,6 +88,14 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             path_fields.append("encoder_model_path")
             if spec.task.motion_source == "planner":
                 path_fields.append("planner_model_path")
+        elif spec.implementation == "waist_locomotion" and not isinstance(
+            spec.task, WaistLocomotionTaskConfig
+        ):
+            raise ValueError(f"Policy {spec.name!r} requires WaistLocomotionTaskConfig")
+        elif spec.implementation == "waist_locomotion" and not isinstance(
+            spec.guard, WaistLocomotionGuardConfig
+        ):
+            raise ValueError(f"Policy {spec.name!r} requires WaistLocomotionGuardConfig")
         resolved_paths: dict[str, str] = {}
         for field_name in path_fields:
             model_path = getattr(spec.task, field_name, None)
@@ -103,6 +115,11 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             if not motion_directory.is_dir():
                 raise ValueError(f"Policy {spec.name!r} motion directory does not exist: {motion_directory}")
             resolved_paths["motion_data_path"] = str(motion_directory)
+        if isinstance(spec.task, WaistLocomotionTaskConfig):
+            motion_data_path = Path(spec.task.motion_data_path).expanduser().resolve()
+            if not motion_data_path.is_file():
+                raise ValueError(f"Policy {spec.name!r} motion file does not exist: {motion_data_path}")
+            resolved_paths["motion_data_path"] = str(motion_data_path)
         task = replace(spec.task, **resolved_paths)
         action_mask = _load_action_mask(spec, runtime.robot.config)
         policy_config = InferenceConfig(runtime.robot.config, spec.observation, task, spec.guard, action_mask)

@@ -6,10 +6,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .GuardConfig import GuardConfig
+from .GuardConfig import GuardConfig, WaistLocomotionGuardConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
-from .task import SonicTaskConfig, TaskConfig
+from .task import SonicTaskConfig, TaskConfig, WaistLocomotionTaskConfig
 
 PolicyType = Literal["full_body", "lower_body", "upper_body"]
 PolicyInput = Literal["vx", "vy", "yaw", "pitch", "height"]
@@ -60,8 +60,8 @@ class PolicySpec(StrictModel):
     type: PolicyType = "full_body"
     inputs: tuple[PolicyInput, ...] = ()
     observation: ObservationConfig
-    task: TaskConfig | SonicTaskConfig
-    guard: GuardConfig | None = None
+    task: TaskConfig | SonicTaskConfig | WaistLocomotionTaskConfig
+    guard: GuardConfig | WaistLocomotionGuardConfig | None = None
 
     @field_validator("name", "implementation")
     @classmethod

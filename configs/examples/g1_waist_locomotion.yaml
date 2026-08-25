@@ -1,0 +1,63 @@
+name: g1-waist-locomotion
+implementation: waist_locomotion
+type: full_body
+inputs:
+- vx
+- vy
+- yaw
+- pitch
+- height
+observation:
+  obs_dict:
+    actor_obs:
+    - actions
+    - base_ang_vel
+    - dof_pos
+    - dof_vel
+    - pelvis_sine_command
+    - projected_gravity
+  obs_dims:
+    actions: 29
+    base_ang_vel: 3
+    dof_pos: 29
+    dof_vel: 29
+    pelvis_sine_command: 7
+    projected_gravity: 3
+  obs_scales:
+    actions: 1.0
+    base_ang_vel: 0.25
+    dof_pos: 1.0
+    dof_vel: 0.05
+    pelvis_sine_command: 1.0
+    projected_gravity: 1.0
+  history_length_dict:
+    actor_obs: 1
+task:
+  model_path: models/loco/g1_29dof/ppo_g1_waist.onnx
+  action_mask_path: null
+  rl_rate: 50.0
+  policy_action_scale: 0.25
+  action_scales_by_effort_limit_over_p_gain: false
+  use_phase: true
+  gait_period: 1.0
+  skip_stiff_prompt: true
+  auto_walk_on_vel_cmd: false
+  use_sim_time: false
+  desired_base_height: 0.75
+  residual_upper_body_action: false
+  print_observations: false
+  motion_data_path: ../../holosoma/src/holosoma/holosoma/data/motions/g1_29dof/knee_down/knee_down.npz
+  motion_start_timestep: 0
+  motion_end_timestep: null
+  motion_loop: false
+  default_amplitude_m: 0.125
+  amplitude_range_m: [0.05, 0.20]
+  frequency_range_hz: [0.2, 2.0]
+  default_direction: [1.0, 0.0, 0.0]
+  debug:
+    force_upright_imu: false
+    force_zero_angular_velocity: false
+    force_zero_action: false
+guard:
+  startup_joint_tolerance_rad: 0.2
+  startup_gravity_tolerance: 0.2

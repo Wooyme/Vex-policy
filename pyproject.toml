@@ -44,6 +44,7 @@ unitree_mp = "vex_policy.sdk.unitree.unitree_interface_mp:UnitreeInterfaceMP"
 locomotion = "vex_policy.policies.locomotion:LocomotionPolicy"
 wbt = "vex_policy.policies.wbt:WholeBodyTrackingPolicy"
 sonic = "vex_policy.policies.sonic:SonicPolicy"
+waist_locomotion = "vex_policy.policies.waist_locomotion:WaistLocomotionPolicy"
 
 [tool.setuptools.packages.find]
 where = ["src"]

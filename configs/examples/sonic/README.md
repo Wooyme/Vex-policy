@@ -1,7 +1,7 @@
 # GEAR-SONIC modes
 
 This directory contains one complete policy YAML for each of the 27 planner
-modes. It is nested intentionally, so the existing default `configs/g1`
+modes. It is nested intentionally, so the existing default `../../g1`
 launch remains unchanged. Run all SONIC modes with:
 
 ```bash

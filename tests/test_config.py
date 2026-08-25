@@ -26,6 +26,7 @@ def test_packaged_config_resolves_all_g1_policies():
         "sonic-doggy1": "sonic",
         "sonic-knee-down": "sonic",
         "g1-doggy1": "wbt",
+        "g1-waist-locomotion": "waist_locomotion",
     }
     assert all(Path(item.config.task.model_path).is_file() for item in resolved)
     locomotion = next(item for item in resolved if item.kind == "locomotion")
@@ -44,7 +45,7 @@ def test_single_policy_yaml_loads_only_that_policy():
 def test_packaged_policy_and_mqtt_yaml_expose_every_field():
     _, path = load_runtime_config()
     policy_paths = tuple(path.glob("*.yaml"))
-    assert len(policy_paths) == 6
+    assert len(policy_paths) == 7
     for policy_path in policy_paths:
         policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
         assert set(policy) <= set(PolicySpec.model_fields)
