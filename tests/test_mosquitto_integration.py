@@ -89,8 +89,8 @@ def test_real_broker_round_trip_and_retained_outputs(tmp_path):
         transport.publish_status(
             {
                 "state": "running",
-                "active_policy": "walk",
-                "requested_policy": "walk",
+                "active_policy": ["walk"],
+                "requested_policy": ["walk"],
                 "reason": None,
                 "last_command_seq": 1,
             }

@@ -35,6 +35,7 @@ observation:
     actor_obs: 1
 task:
   model_path: models/wbt/ppo_g1_sex.onnx
+  action_mask_path: null
   rl_rate: 50.0
   policy_action_scale: 1.0
   action_scales_by_effort_limit_over_p_gain: true

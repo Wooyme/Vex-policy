@@ -10,7 +10,7 @@ from vex_policy.config import load_runtime_config, resolve_policies
 from vex_policy.config.config_types import PolicySpec, SonicTaskConfig
 from vex_policy.policies.sonic import SonicPolicy
 from vex_policy.policies.sonic_motion import load_motion_directory
-from vex_policy.policies.sonic_planner import MODE_NAMES, POLICY_TO_HW, MotionSequence, SonicPlanner
+from vex_policy.policies.sonic_planner import HW_TO_POLICY, MODE_NAMES, POLICY_TO_HW, MotionSequence, SonicPlanner
 
 
 class _FakeInterface:
@@ -165,3 +165,17 @@ def test_sonic_task_replace_preserves_specialized_type():
     updated = replace(task, model_path="/tmp/decoder.onnx")
     assert isinstance(updated, SonicTaskConfig)
     assert updated.lowcmd_publish_rate == 500.0
+
+
+def test_sonic_action_mask_is_converted_from_hardware_to_policy_order():
+    policy = object.__new__(SonicPolicy)
+    policy.action_mask = np.ones((1, 29), dtype=np.float32)
+    policy.action_mask[:, 15:] = 0.0
+    policy.config = SimpleNamespace(task=SimpleNamespace(debug=SimpleNamespace(force_zero_action=False)))
+
+    action_policy = np.arange(1, 30, dtype=np.float32).reshape(1, -1)
+    masked_policy = policy._mask_policy_order_action(action_policy)
+    masked_hardware = masked_policy[:, HW_TO_POLICY]
+
+    assert np.array_equal(masked_hardware[0, :15], action_policy[:, HW_TO_POLICY][0, :15])
+    assert np.array_equal(masked_hardware[0, 15:], np.zeros(14))

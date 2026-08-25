@@ -24,6 +24,7 @@ class TaskConfig:
     """
 
     model_path: str
+    action_mask_path: str | None = None
     rl_rate: float = 50.0
     policy_action_scale: float = 0.25
     action_scales_by_effort_limit_over_p_gain: bool = False

@@ -34,9 +34,9 @@ class CommandControl(BaseModel):
 
     @field_validator("policy")
     @classmethod
-    def one_unique_policy(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if len(value) > 1:
-            raise ValueError("v1 accepts at most one active policy")
+    def valid_policy_count(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) > 2:
+            raise ValueError("at most two active policies are supported")
         if len(set(value)) != len(value):
             raise ValueError("policy names must not repeat")
         return value
@@ -69,8 +69,13 @@ class ReceivedCommand:
 class CommandInbox:
     """Thread-safe newest-valid-command store."""
 
-    def __init__(self, policy_names: Iterable[str], clock: Callable[[], float] = time.monotonic):
-        self._policy_names = frozenset(policy_names)
+    def __init__(
+        self,
+        policies: Iterable[str] | dict[str, PolicySpec],
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        self._policy_specs = dict(policies) if isinstance(policies, dict) else None
+        self._policy_names = frozenset(policies)
         self._clock = clock
         self._lock = threading.Lock()
         self._latest: ReceivedCommand | None = None
@@ -79,8 +84,16 @@ class CommandInbox:
     def accept(self, payload: bytes | str) -> bool:
         try:
             packet = ControlPacket.model_validate_json(payload)
-            if packet.control.policy and packet.control.policy[0] not in self._policy_names:
-                raise ValueError(f"unknown policy: {packet.control.policy[0]}")
+            unknown = set(packet.control.policy) - self._policy_names
+            if unknown:
+                raise ValueError(f"unknown policies: {sorted(unknown)}")
+            if self._policy_specs is not None:
+                selected = [self._policy_specs[name] for name in packet.control.policy]
+                types = [policy.type for policy in selected]
+                if "full_body" in types and len(types) > 1:
+                    raise ValueError("full_body policies must run alone")
+                if len(types) != len(set(types)):
+                    raise ValueError("only one policy of each body type may be active")
         except (ValueError, TypeError):
             with self._lock:
                 self.invalid_messages += 1
@@ -166,8 +179,8 @@ class MqttTransport:
             self._json(
                 {
                     "state": "offline",
-                    "active_policy": None,
-                    "requested_policy": None,
+                    "active_policy": [],
+                    "requested_policy": [],
                     "reason": "mqtt_disconnect",
                     "last_command_seq": None,
                 }
@@ -234,8 +247,8 @@ class MqttTransport:
             self.publish_status(
                 {
                     "state": "offline",
-                    "active_policy": None,
-                    "requested_policy": None,
+                    "active_policy": [],
+                    "requested_policy": [],
                     "reason": "shutdown",
                     "last_command_seq": None,
                 }

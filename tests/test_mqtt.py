@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 
+from vex_policy.config import load_runtime_config
 from vex_policy.mqtt import CommandInbox, encode_robot_state, parse_broker
 
 
@@ -23,7 +24,7 @@ def packet(*, policy=None, estop=False, vx=0.5):
     )
 
 
-def test_inbox_accepts_only_strict_known_single_policy():
+def test_inbox_accepts_only_strict_known_policies():
     inbox = CommandInbox(["walk"], clock=lambda: 12.5)
     assert inbox.accept(packet(policy=["walk"]))
     assert inbox.snapshot().received_at == 12.5
@@ -33,6 +34,19 @@ def test_inbox_accepts_only_strict_known_single_policy():
     assert not inbox.accept(packet(policy=["walk"], vx=2.0))
     assert inbox.invalid_messages == 3
     assert inbox.snapshot().packet.seq == 7
+
+
+def test_inbox_accepts_lower_upper_pair_and_rejects_invalid_compositions():
+    runtime, _ = load_runtime_config()
+    lower = next(policy for policy in runtime.policies if policy.type == "lower_body")
+    full = next(policy for policy in runtime.policies if policy.type == "full_body")
+    upper = lower.model_copy(update={"name": "arms", "type": "upper_body"})
+    inbox = CommandInbox({policy.name: policy for policy in (lower, upper, full)})
+
+    assert inbox.accept(packet(policy=[upper.name, lower.name]))
+    assert not inbox.accept(packet(policy=[full.name, lower.name]))
+    assert not inbox.accept(packet(policy=[lower.name, lower.name]))
+    assert not inbox.accept(packet(policy=[lower.name, upper.name, full.name]))
 
 
 def test_accepted_input_filter_zeros_unadvertised_fields():

@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from vex_policy.config.config_types import (
+    ActionMaskConfig,
     InferenceConfig,
     MqttConfig,
     PolicySpec,
@@ -34,8 +35,8 @@ def default_mqtt_config_path() -> Path:
 
 
 def load_runtime_config(
-        path: str | Path | None = None,
-        mqtt_path: str | Path | None = None,
+    path: str | Path | None = None,
+    mqtt_path: str | Path | None = None,
 ) -> tuple[RuntimeConfig, Path]:
     config_path = Path(path).expanduser().resolve() if path else default_config_path()
     if config_path.is_dir():
@@ -50,7 +51,15 @@ def load_runtime_config(
     policies: list[PolicySpec] = []
     for policy_path in policy_paths:
         with policy_path.open(encoding="utf-8") as stream:
-            policies.append(PolicySpec.model_validate(yaml.safe_load(stream)))
+            spec = PolicySpec.model_validate(yaml.safe_load(stream))
+        if spec.task.action_mask_path:
+            mask_path = Path(spec.task.action_mask_path).expanduser()
+            if not mask_path.is_absolute():
+                mask_path = policy_path.parent / mask_path
+            mask_path = mask_path.resolve()
+            task = replace(spec.task, action_mask_path=str(mask_path))
+            spec = spec.model_copy(update={"task": task})
+        policies.append(spec)
 
     resolved_mqtt_path = Path(mqtt_path).expanduser().resolve() if mqtt_path else default_mqtt_config_path()
     with resolved_mqtt_path.open(encoding="utf-8") as stream:
@@ -80,6 +89,8 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             model_path = getattr(spec.task, field_name, None)
             if not model_path:
                 raise ValueError(f"Policy {spec.name!r} {field_name} must be configured")
+            if "://" in str(model_path):
+                raise ValueError(f"Policy {spec.name!r} {field_name} must reference a local file")
             candidate = Path(model_path).expanduser().resolve()
             if not candidate.is_file():
                 raise ValueError(f"Policy {spec.name!r} model file does not exist: {candidate}")
@@ -93,7 +104,8 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
                 raise ValueError(f"Policy {spec.name!r} motion directory does not exist: {motion_directory}")
             resolved_paths["motion_data_path"] = str(motion_directory)
         task = replace(spec.task, **resolved_paths)
-        policy_config = InferenceConfig(runtime.robot.config, spec.observation, task, spec.guard)
+        action_mask = _load_action_mask(spec, runtime.robot.config)
+        policy_config = InferenceConfig(runtime.robot.config, spec.observation, task, spec.guard, action_mask)
         rates.add(policy_config.task.rl_rate)
         resolved.append(ResolvedPolicy(spec, policy_config, spec.implementation))
 
@@ -103,3 +115,38 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
     if runtime.mqtt.state_frequency_hz > rate:
         raise ValueError("mqtt.state_frequency_hz must not exceed the policy control rate")
     return tuple(resolved)
+
+
+def _load_action_mask(spec: PolicySpec, robot) -> ActionMaskConfig | None:
+    """Load a referenced mask and validate its joint ownership contract."""
+    action_mask: ActionMaskConfig | None = None
+    if spec.task.action_mask_path:
+        mask_path = Path(spec.task.action_mask_path)
+        if not mask_path.is_file():
+            raise ValueError(f"Policy {spec.name!r} action mask file does not exist: {mask_path}")
+        with mask_path.open(encoding="utf-8") as stream:
+            action_mask = ActionMaskConfig(**yaml.safe_load(stream))
+
+    masked_names = action_mask.masked_joints if action_mask is not None else ()
+    if len(set(masked_names)) != len(masked_names):
+        raise ValueError(f"Policy {spec.name!r} action mask contains duplicate joint names")
+
+    known = set(robot.dof_names)
+    unknown = sorted(set(masked_names) - known)
+    if unknown:
+        raise ValueError(f"Policy {spec.name!r} action mask contains unknown joints: {unknown}")
+
+    controlled = known - set(masked_names)
+    if not controlled:
+        raise ValueError(f"Policy {spec.name!r} action mask must leave at least one joint controlled")
+
+    if spec.type == "lower_body":
+        invalid = sorted(controlled - set(robot.dof_names_lower_body))
+        if invalid:
+            raise ValueError(f"Lower-body policy {spec.name!r} controls upper-body joints: {invalid}")
+    elif spec.type == "upper_body":
+        invalid = sorted(controlled - set(robot.dof_names_upper_body))
+        if invalid:
+            raise ValueError(f"Upper-body policy {spec.name!r} controls lower-body joints: {invalid}")
+
+    return action_mask

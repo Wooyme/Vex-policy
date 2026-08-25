@@ -12,7 +12,7 @@ from termcolor import colored
 from vex_policy.config.config_types.inference import InferenceConfig
 from vex_policy.policies import BasePolicy
 from vex_policy.policies.guard.wbt import WbtGuard
-from vex_policy.policies.wbt_utils import MotionClockUtil, PinocchioRobot, TimestepUtil, NpzTargetSource
+from vex_policy.policies.wbt_utils import MotionClockUtil, NpzTargetSource, PinocchioRobot, TimestepUtil
 from vex_policy.utils.clock import ClockSub
 from vex_policy.utils.math.quat import (
     matrix_from_quat,
@@ -289,6 +289,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
         # clip policy action
         policy_action = np.clip(policy_action, -100, 100)
+        policy_action = self._mask_policy_action(policy_action)
         # store last policy action
         self.last_policy_action = policy_action.copy()
         # scale policy action
@@ -415,7 +416,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.get_ready_state = False
         self._stiff_hold_active = True
         self.logger.info("Actions set to stiff startup command")
-        if hasattr(self.interface, "no_action"):
+        if not getattr(self, "_manager_owns_interface_lifecycle", False) and hasattr(self.interface, "no_action"):
             self.interface.no_action = 0
 
         self.motion_clip_progressing = False

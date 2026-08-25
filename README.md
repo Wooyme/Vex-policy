@@ -37,14 +37,14 @@ uv run vex-policy \
 
 ## 默认 policies
 
-服务启动时预加载并 retained 发布以下 `robot/policies` 数组。v1 中它们均为互斥的 `full_body` policy：
+服务启动时预加载并 retained 发布 `configs/g1/*.yaml` 中的 policy。`full_body` policy 互斥运行；一个
+`lower_body` 和一个 `upper_body` policy 可以同时选择并按关节合成命令。
 
 | name | implementation | accepted inputs |
 | --- | --- | --- |
-| `g1-fastsac-locomotion` | FastSAC locomotion | `vx`, `vy`, `yaw` |
-| `g1-ppo-locomotion` | PPO locomotion | `vx`, `vy`, `yaw` |
-| `g1-fastsac-wbt-dancing` | FastSAC WBT | 无，选择后自动播放 clip |
-| `g1-ppo-wbt-dancing` | PPO WBT | 无，选择后自动播放 clip |
+| `g1-ppo-locomotion` | PPO locomotion（lower body） | `vx`, `vy`, `yaw` |
+| `g1-sonic-slow-walk` | SONIC | `vx`, `vy`, `yaw`, `height` |
+| `g1-wbt-example` | PPO WBT | 无，选择后自动播放 clip |
 
 ## GEAR-SONIC
 
@@ -82,6 +82,7 @@ planner 模式保持源部署的三种频率：decoder/encoder 控制循环 50Hz
 
 - `vex_policy/robots/g1.py`：稳定的 G1 硬件、关节映射、启动刚度与动作缩放常量。
 - `configs/g1/*.yaml`：每个文件只包含一个完整 policy，包括 observation 和 task；文件之间不使用 anchor 或继承。
+- `configs/g1/action_masks/*.yaml`：按关节名定义的模型输出 mask；该子目录不会被 policy 目录加载器扫描。
 - `configs/mqtt.yaml`：独立的 broker、topics、超时和发布频率配置。
 
 CLI 中 `--config` 与 `--policy-config` 等价，可传一个目录加载其中全部 `*.yaml`，也可传单个 YAML 只加载一个策略。文件名和加载顺序不构成运行协议，策略始终由 MQTT 中的 `name` 选择。`--mqtt-config` 可指定另一份 MQTT 配置。`model_path` 仅支持绝对路径或相对进程当前工作目录的本地路径，文件不存在会在加载阶段报错。所有 YAML 层级均严格校验，未知字段会导致启动失败。
@@ -92,15 +93,21 @@ CLI 中 `--config` 与 `--policy-config` 等价，可传一个目录加载其中
 # 关键字段示意；完整字段可复制同类 policy 文件后修改
 name: my-locomotion
 implementation: locomotion
-type: full_body
+type: lower_body
 inputs: [vx, vy, yaw]
 observation: # 在单个文件中声明完整 ObservationConfig
   # 完整 obs_dict、obs_dims、obs_scales、history_length_dict
 task:
   model_path: /opt/vex/models/my-policy.onnx
+  action_mask_path: action_masks/disable_upper_body.yaml
   rl_rate: 50.0
   # 其余 TaskConfig 字段同样在 YAML 中显式配置
 ```
+
+`action_mask_path` 相对当前 policy YAML 所在目录解析；设为 `null` 表示不屏蔽。mask 文件使用
+`masked_joints` 列出需要置零的 residual action。仓库提供 `disable_upper_body.yaml`（双臂 14 个关节）和
+`disable_lower_body.yaml`（双腿与腰部 15 个关节）。屏蔽维单独运行时保持 `default_dof_angles`，组合运行时
+不会写入合成命令，因此可由另一身体区域的策略接管。`lower_body`/`upper_body` 的未屏蔽关节不得越过各自区域。
 
 ## MQTT 协议
 
@@ -116,30 +123,31 @@ task:
     "yaw": -0.1,
     "pitch": 0.0,
     "height": 0.0,
-    "policy": ["g1-fastsac-locomotion"],
+    "policy": ["g1-ppo-locomotion", "my-upper-body-policy"],
     "estop": false
   }
 }
 ```
 
-无效、未知或多选 policy 消息会被丢弃且不会刷新 watchdog。默认 1 秒没有合法消息即锁存。
+policy 数组可为空、包含一个 policy，或同时包含一个 `lower_body` 和一个 `upper_body` policy。`full_body`
+必须独占；重复类型、未知名称和超过两个 policy 的消息会被丢弃且不会刷新 watchdog。默认 1 秒没有合法消息即锁存。
 
 输出 topics：
 
 - `robot/policies`：QoS 1、retained，面板使用的直接 JSON 数组。
-- `robot/status`：QoS 1、retained，字段为 `state`、`active_policy`、`requested_policy`、`reason`、`last_command_seq`；配置了 offline Last Will。
+- `robot/status`：QoS 1、retained，字段为 `state`、数组类型的 `active_policy`/`requested_policy`、`reason`、`last_command_seq`；配置了 offline Last Will。
 - `robot/g1/real/state`：QoS 0、非 retained、默认 50 Hz；字段与 `../sim/g1_mujoco_sim/mqtt.py` 完全一致：`timestamp`、`simulation_time`、`joint_names`、`joint_values`、`base_xyz`、`base_quat_wxyz`。
-- `robot/g1/reference/state`：仅在 WBT policy 激活时发布，QoS 0、非 retained、与真实状态同频且使用相同字段结构；`joint_values` 是 WBT 当前参考关节位置，`base_quat_wxyz` 是当前参考姿态，`base_xyz` 固定为 `[0, 0, 0]`。topic 可通过 `reference_state_topic` 修改。
+- `robot/g1/reference/state`：仅在单个、可提供参考状态的 policy 激活时发布；组合策略运行时不发布。QoS 0、非 retained、与真实状态同频且使用相同字段结构。
 
 Unitree 低层接口当前没有世界位置估计，所以真实状态中的 `base_xyz` 为 `[0, 0, 0]`。控制面板添加真实 G1 后，需要把实例 motion topic 从默认的 `robot/g1/mujoco/state` 改为 `robot/g1/real/state`。
 
 ## 安全状态机
 
 - 启动状态为 `startup_latched`，不会发送任何低层命令。
-- 先收到 `estop=false` 且 `policy=[]` 才进入 `idle`；随后选择一个 policy 才启动推理。
+- 先收到 `estop=false` 且 `policy=[]` 才进入 `idle`；随后选择一个合法 policy 或上下半身组合才启动推理。
 - `estop=true`、合法命令超时、空 policy 和策略切换间隙都不会调用 `write_low_command`，但仍读取并发布机器人状态。
 - 急停或超时解除后不会自动恢复；必须先发送非急停空 policy，再重新选择。
-- 两个 policy 直接切换时会停止旧实例、更新目标 KP/KD、重置目标状态，并保留一个控制周期的低层命令空档。
+- 选择变化时仅停止被移除的实例并初始化新增实例，未变化策略保留历史与相位；切换保留一个控制周期的低层命令空档。
 
 这里的“停止”会禁用 500Hz writer 并清空缓存，机器人最终行为由固件 watchdog/当前控制模式决定。部署前必须在安全支撑环境验证固件侧行为，MQTT estop 不能代替物理急停。
 

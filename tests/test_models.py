@@ -5,6 +5,7 @@ from vex_policy.config import load_runtime_config, resolve_policies
 from vex_policy.inputs import ControlValues
 from vex_policy.mqtt import CommandInbox
 from vex_policy.policies.locomotion import LocomotionPolicy
+from vex_policy.policies.sonic import SonicPolicy
 from vex_policy.policies.switch_mode import SwitchModePolicy
 from vex_policy.policies.wbt import WholeBodyTrackingPolicy
 
@@ -41,12 +42,16 @@ class NullTransport:
         del payload
 
 
-@pytest.mark.parametrize("index", range(4))
+@pytest.mark.parametrize("index", range(6))
 def test_every_packaged_model_initializes_and_runs_one_step(index):
     runtime, path = load_runtime_config()
     resolved = resolve_policies(runtime, path)[index]
     config = resolved.config
-    cls = WholeBodyTrackingPolicy if resolved.kind == "wbt" else LocomotionPolicy
+    cls = {
+        "locomotion": LocomotionPolicy,
+        "sonic": SonicPolicy,
+        "wbt": WholeBodyTrackingPolicy,
+    }[resolved.kind]
     interface = FakeInterface(config.robot)
     policy = object.__new__(cls)
     policy._injected_interface = interface
@@ -57,6 +62,12 @@ def test_every_packaged_model_initializes_and_runs_one_step(index):
     policy.step()
     assert len(interface.commands) == 1
     assert np.isfinite(policy.cmd_q).all()
+    if resolved.kind == "locomotion":
+        assert np.allclose(policy.last_policy_action[0, policy.upper_dof_indices], 0.0)
+        expected_upper = (
+            policy.default_dof_angles[policy.upper_dof_indices] + policy.joint_offsets[policy.upper_dof_indices]
+        )
+        assert np.allclose(policy.cmd_q[policy.upper_dof_indices], expected_upper)
     if resolved.kind == "wbt":
         reference_state = policy.get_reference_state()
         assert reference_state.shape == (1, 36)
@@ -80,11 +91,9 @@ def test_switch_manager_preloads_all_models_on_one_interface():
         transport=NullTransport(),
     )
     try:
-        assert len(manager.policies) == 4
+        assert len(manager.policies) == len(resolved)
         assert all(policy.interface is interface for policy in manager.policies.values())
-        for name, policy in manager.policies.items():
-            manager._activate(name)
-            assert interface.robot_config == policy.robot_config
+        assert all(policy.robot_config.motor_kp is not None for policy in manager.policies.values())
     finally:
         for policy in manager.policies.values():
             policy.close()

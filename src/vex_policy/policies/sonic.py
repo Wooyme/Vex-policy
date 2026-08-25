@@ -177,6 +177,13 @@ class SonicPolicy(BasePolicy):
         if len(outputs) != 1 or int(np.prod(outputs[0].shape)) != output_size:
             raise ValueError(f"{label} must have one {output_size}-element output")
 
+    def _mask_policy_order_action(self, action_policy: np.ndarray) -> np.ndarray:
+        """Apply the hardware-order mask to a SONIC/IsaacLab-order output."""
+        masked = np.asarray(action_policy, dtype=np.float32) * self.action_mask[:, POLICY_TO_HW]
+        if self.config.task.debug.force_zero_action:
+            masked.fill(0.0)
+        return masked
+
     def setup_policy(self, model_path):
         provider = self.sonic_task.inference_provider
         self.onnx_policy_session = _shared_session(model_path, provider)
@@ -468,10 +475,9 @@ class SonicPolicy(BasePolicy):
         decoder_observation = self._decoder_observation(token)
         action_policy = np.asarray(self.policy(decoder_observation), dtype=np.float32)
         action_policy = np.clip(action_policy, -100.0, 100.0)
+        action_policy = self._mask_policy_order_action(action_policy)
         self.last_policy_action = action_policy.copy()
         action_hw = action_policy[:, HW_TO_POLICY] * self._action_scale_hw
-        if self.config.task.debug.force_zero_action:
-            action_hw.fill(0.0)
         self.scaled_policy_action = action_hw
 
         max_frame = motion.frames - 1

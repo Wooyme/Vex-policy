@@ -1,6 +1,6 @@
 name: g1-ppo-locomotion
 implementation: locomotion
-type: full_body
+type: lower_body
 inputs:
 - vx
 - vy
@@ -43,6 +43,7 @@ observation:
     actor_obs: 1
 task:
   model_path: models/loco/g1_29dof/ppo_g1_29dof.onnx
+  action_mask_path: action_masks/disable_upper_body.yaml
   rl_rate: 50.0
   policy_action_scale: 0.25
   action_scales_by_effort_limit_over_p_gain: false
@@ -60,4 +61,3 @@ task:
     force_upright_imu: false
     force_zero_angular_velocity: false
     force_zero_action: false
-

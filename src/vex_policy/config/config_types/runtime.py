@@ -84,8 +84,6 @@ def _validate_policy_set(policies: tuple[PolicySpec, ...]) -> None:
     names = [policy.name for policy in policies]
     if len(set(names)) != len(names):
         raise ValueError("policy names must be unique")
-    if any(policy.type != "full_body" for policy in policies):
-        raise ValueError("v1 supports only mutually exclusive full_body policies")
 
 
 class RuntimeConfig(StrictModel):

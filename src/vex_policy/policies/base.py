@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from collections import deque
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +18,18 @@ from vex_policy.inputs.api.commands import ControlValues, VelCmd
 from vex_policy.sdk import create_interface
 from vex_policy.utils.latency import LatencyTracker
 from vex_policy.utils.math.quat import quat_rotate_inverse
+
+
+@dataclass(frozen=True)
+class PolicyJointCommand:
+    """One policy's full hardware-order joint command before calibration offsets."""
+
+    q: np.ndarray
+    dq: np.ndarray
+    tau: np.ndarray
+    kp: np.ndarray
+    kd: np.ndarray
+    controlled_joints: np.ndarray
 
 
 class BasePolicy:
@@ -67,6 +79,7 @@ class BasePolicy:
 
         # Setup dof names and indices
         self._setup_dof_mappings()
+        self._setup_action_mask()
 
     def _setup_dof_mappings(self):
         """Setup DOF names and their corresponding indices."""
@@ -85,6 +98,30 @@ class BasePolicy:
             self.lower_dof_indices = [self.dof_names.index(dof) for dof in self.lower_dof_names]
         else:
             self.lower_dof_indices = []
+
+    def _setup_action_mask(self) -> None:
+        """Build the binary action mask in hardware joint order."""
+        self.action_mask = np.ones((1, self.num_dofs), dtype=np.float32)
+        configured = self.config.action_mask
+        if configured is not None:
+            for name in configured.masked_joints:
+                self.action_mask[0, self.dof_names.index(name)] = 0.0
+        self.controlled_joint_mask = self.action_mask[0].astype(bool)
+
+    def _mask_policy_action(self, policy_action: np.ndarray) -> np.ndarray:
+        """Apply the configured mask to a hardware-order model output."""
+        action = np.asarray(policy_action, dtype=np.float32)
+        if action.ndim != 2 or action.shape[0] != 1:
+            raise ValueError(f"Policy action must have shape (1, N), got {action.shape}")
+        if action.shape[1] == self.num_dofs:
+            action = action * self.action_mask
+        elif self.config.action_mask is not None:
+            raise ValueError(
+                f"Action masks require a {self.num_dofs}-element full-body model output, got {action.shape[1]}"
+            )
+        if self.config.task.debug.force_zero_action:
+            action.fill(0.0)
+        return action
 
     def _init_sdk_components(self):
         """Record the SDK backend; concrete construction remains registry based."""
@@ -415,11 +452,10 @@ class BasePolicy:
 
         policy_action = self.policy(obs)
         policy_action = np.clip(policy_action, -100, 100)
+        policy_action = self._mask_policy_action(policy_action)
 
         self.last_policy_action = policy_action.copy()
         self.scaled_policy_action = policy_action * self.policy_action_scale
-        if self.config.task.debug.force_zero_action:
-            self.scaled_policy_action = np.zeros_like(self.scaled_policy_action)
 
         return self.scaled_policy_action
 
@@ -535,9 +571,8 @@ class BasePolicy:
             return q_target
         return dof_pos
 
-    def policy_action(self):
-        """Execute policy action and send commands to robot."""
-
+    def compute_joint_command(self, robot_state_data: np.ndarray) -> PolicyJointCommand:
+        """Compute one control cycle without publishing to the hardware interface."""
         # Snapshot flags to prevent race with mode-switch handler thread
         use_policy = self.use_policy_action
         get_ready = self.get_ready_state
@@ -545,16 +580,7 @@ class BasePolicy:
         kp_override = None
         kd_override = None
 
-        # Stage 1: Read State
-        with self.latency_tracker.measure("read_state"):
-            robot_state_data = self.interface.get_low_state()
-        if robot_state_data is None:
-            stop_writer = getattr(self.interface, "stop_command_writer", None)
-            if stop_writer is not None:
-                stop_writer()
-            raise RuntimeError("Low-level robot state is unavailable or stale; command publishing has stopped")
-
-        # Stage 2: Pre-processing
+        # Stage 1: Pre-processing
         with self.latency_tracker.measure("preprocessing"):
             # Determine target joint positions
             if get_ready:
@@ -572,12 +598,12 @@ class BasePolicy:
                 # Prepare for inference - any preprocessing before RL inference
                 pass
 
-        # Stage 3: Inference
+        # Stage 2: Inference
         if use_policy and not get_ready:
             with self.latency_tracker.measure("inference"):
                 scaled_policy_action = self.rl_inference(robot_state_data)
 
-        # Stage 4: Post-processing
+        # Stage 3: Post-processing
         with self.latency_tracker.measure("postprocessing"):
             if use_policy and not get_ready:
                 if scaled_policy_action.shape[1] != self.num_dofs:
@@ -589,18 +615,32 @@ class BasePolicy:
                         raise NotImplementedError("Upper body controller not implemented")
                 q_target = scaled_policy_action + self.default_dof_angles
 
-            # Prepare command (reuse pre-allocated arrays)
-            self.cmd_q[:] = q_target[0] + self.joint_offsets
+            kp = np.asarray(kp_override if kp_override is not None else self.robot_config.motor_kp, dtype=np.float64)
+            kd = np.asarray(kd_override if kd_override is not None else self.robot_config.motor_kd, dtype=np.float64)
 
-        # Stage 5: Action Pub
+        return PolicyJointCommand(
+            q=np.asarray(q_target[0], dtype=np.float64).copy(),
+            dq=np.zeros(self.num_dofs, dtype=np.float64),
+            tau=np.zeros(self.num_dofs, dtype=np.float64),
+            kp=kp.copy(),
+            kd=kd.copy(),
+            controlled_joints=self.controlled_joint_mask.copy(),
+        )
+
+    def send_joint_command(self, command: PolicyJointCommand, robot_state_data: np.ndarray) -> None:
+        """Publish a computed command, applying calibration offsets exactly once."""
+        self.cmd_q[:] = command.q + self.joint_offsets
+        self.cmd_dq[:] = command.dq
+        self.cmd_tau[:] = command.tau
+
         with self.latency_tracker.measure("action_pub"):
             self.interface.send_low_command(
                 self.cmd_q,
                 self.cmd_dq,
                 self.cmd_tau,
-                robot_state_data[0, 7: 7 + self.num_dofs],
-                kp_override=kp_override,
-                kd_override=kd_override,
+                robot_state_data[0, 7 : 7 + self.num_dofs],
+                kp_override=command.kp,
+                kd_override=command.kd,
             )
 
         # Telemetry hook: fires every control tick in every state (policy,
@@ -608,6 +648,18 @@ class BasePolicy:
         # no-op; override to publish feedback (e.g. ROS topics) without
         # touching the control loop.
         self._on_command_sent(self.cmd_q, robot_state_data)
+
+    def policy_action(self):
+        """Execute policy action and send commands to robot."""
+        with self.latency_tracker.measure("read_state"):
+            robot_state_data = self.interface.get_low_state()
+        if robot_state_data is None:
+            stop_writer = getattr(self.interface, "stop_command_writer", None)
+            if stop_writer is not None:
+                stop_writer()
+            raise RuntimeError("Low-level robot state is unavailable or stale; command publishing has stopped")
+        command = self.compute_joint_command(robot_state_data)
+        self.send_joint_command(command, robot_state_data)
 
     def _on_command_sent(self, cmd_q, robot_state_data) -> None:
         """Hook called after each executed command is sent. Override to observe.
@@ -651,7 +703,7 @@ class BasePolicy:
         self.get_ready_state = False
         self.logger.info(colored("Using policy actions", "blue"))
         self.phase = np.array([[0.0, np.pi]])
-        if hasattr(self.interface, "no_action"):
+        if not getattr(self, "_manager_owns_interface_lifecycle", False) and hasattr(self.interface, "no_action"):
             self.interface.no_action = 0
 
     def activate(self) -> str | None:
@@ -662,17 +714,19 @@ class BasePolicy:
                 return reason
         self._init_phase_components()
         self._handle_start_policy()
-        self._configure_interface_writer()
-        start_writer = getattr(self.interface, "start_command_writer", None)
-        if start_writer is not None:
-            start_writer()
+        if not getattr(self, "_manager_owns_interface_lifecycle", False):
+            self._configure_interface_writer()
+            start_writer = getattr(self.interface, "start_command_writer", None)
+            if start_writer is not None:
+                start_writer()
 
     def deactivate(self) -> None:
         """Stop inference state without sending another low-level command."""
         self._handle_stop_policy()
-        stop_writer = getattr(self.interface, "stop_command_writer", None)
-        if stop_writer is not None:
-            stop_writer()
+        if not getattr(self, "_manager_owns_interface_lifecycle", False):
+            stop_writer = getattr(self.interface, "stop_command_writer", None)
+            if stop_writer is not None:
+                stop_writer()
 
     def step(self) -> None:
         """Execute one active control cycle."""
@@ -694,7 +748,7 @@ class BasePolicy:
         self.use_policy_action = False
         self.get_ready_state = False
         self.logger.info("Actions set to zero")
-        if hasattr(self.interface, "no_action"):
+        if not getattr(self, "_manager_owns_interface_lifecycle", False) and hasattr(self.interface, "no_action"):
             self.interface.no_action = 1
 
     def _handle_init_state(self):
@@ -702,7 +756,7 @@ class BasePolicy:
         self.get_ready_state = True
         self.init_count = 0
         self.logger.info("Setting to init state")
-        if hasattr(self.interface, "no_action"):
+        if not getattr(self, "_manager_owns_interface_lifecycle", False) and hasattr(self.interface, "no_action"):
             self.interface.no_action = 0
 
     def _print_control_status(self):

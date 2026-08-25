@@ -1,5 +1,6 @@
 """Type definitions for vex_policy configuration system."""
 
+from .action_mask import ActionMaskConfig
 from .inference import InferenceConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
@@ -14,7 +15,9 @@ from .runtime import (
 from .task import DebugConfig, SonicTaskConfig, TaskConfig
 
 __all__ = [
+    "ActionMaskConfig",
     "DebugConfig",
+    "GuardConfig",
     "InferenceConfig",
     "MqttConfig",
     "ObservationConfig",
@@ -26,5 +29,4 @@ __all__ = [
     "RuntimeConfig",
     "SonicTaskConfig",
     "TaskConfig",
-    "GuardConfig"
 ]
