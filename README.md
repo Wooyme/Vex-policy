@@ -144,6 +144,17 @@ inputs:
   parameter: {name: yaw, min: -1.0, max: 1.0, default: 0.0}
 ```
 
+## Hold position
+
+`hold_position` 是不加载 ONNX 网络的保持策略，完整示例见 `configs/examples/g1_hold_position.yaml`。每次
+activate 时读取一次 LowState 并保存当时的全部 `dof_pos`，之后持续将该姿态作为位置目标；deactivate 后
+丢弃快照，因此再次 activate 会捕获新的姿态。它没有控制参数，使用 `inputs: []`，task 只配置控制频率、
+writer 频率、LowState 超时和可选的 `action_mask_path`。
+
+该策略优先使用 robot config 的 `motor_kp/motor_kd`，缺失时使用 `stiff_startup_kp/stiff_startup_kd`。
+`action_mask_path` 与其他策略相同：被 mask 的关节不会写入组合命令，可交给同时运行的另一个身体区域策略。
+例如将 policy 设为 `lower_body` 并使用 `configs/g1/action_masks/disable_upper_body.yaml`，即可只保持下半身。
+
 ## MQTT 协议
 
 控制输入订阅 `robot/commands`（QoS 0），格式与 `../mujoco-arcade-robot-control-panel/src/hooks/useMqttClient.ts` 一致：

@@ -41,6 +41,7 @@ unitree = "vex_policy.sdk.unitree.unitree_interface:UnitreeInterface"
 unitree_mp = "vex_policy.sdk.unitree.unitree_interface_mp:UnitreeInterfaceMP"
 
 [project.entry-points."vex_policy.policies"]
+hold_position = "vex_policy.policies.hold_position:HoldPositionPolicy"
 locomotion = "vex_policy.policies.locomotion:LocomotionPolicy"
 wbt = "vex_policy.policies.wbt:WholeBodyTrackingPolicy"
 sonic = "vex_policy.policies.sonic:SonicPolicy"

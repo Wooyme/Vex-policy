@@ -9,6 +9,7 @@ import yaml
 
 from vex_policy.config.config_types import (
     ActionMaskConfig,
+    HoldPositionTaskConfig,
     InferenceConfig,
     MqttConfig,
     PolicySpec,
@@ -81,7 +82,9 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
     resolved: list[ResolvedPolicy] = []
     rates: set[float] = set()
     for spec in runtime.policies:
-        path_fields = ["model_path"]
+        path_fields = [] if spec.implementation == "hold_position" else ["model_path"]
+        if spec.implementation == "hold_position" and not isinstance(spec.task, HoldPositionTaskConfig):
+            raise ValueError(f"Policy {spec.name!r} requires HoldPositionTaskConfig")
         if spec.implementation == "sonic":
             if not isinstance(spec.task, SonicTaskConfig):
                 raise ValueError(f"Policy {spec.name!r} requires SonicTaskConfig")

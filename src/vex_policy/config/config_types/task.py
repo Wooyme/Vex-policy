@@ -16,6 +16,16 @@ class DebugConfig:
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class HoldPositionTaskConfig:
+    """Timing and writer configuration for the model-free hold policy."""
+
+    action_mask_path: str | None = None
+    rl_rate: float = Field(default=50.0, gt=0)
+    lowcmd_publish_rate: float = Field(default=500.0, gt=0)
+    low_state_timeout_s: float = Field(default=0.1, gt=0)
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class TaskConfig:
     """Parameters that affect one policy instance.
 

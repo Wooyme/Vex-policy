@@ -1,0 +1,14 @@
+name: g1-hold-position
+implementation: hold_position
+type: full_body
+inputs: []
+observation:
+  obs_dict: {}
+  obs_dims: {}
+  obs_scales: {}
+  history_length_dict: {}
+task:
+  action_mask_path: null
+  rl_rate: 50.0
+  lowcmd_publish_rate: 500.0
+  low_state_timeout_s: 0.1

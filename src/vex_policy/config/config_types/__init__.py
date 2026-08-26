@@ -13,12 +13,13 @@ from .runtime import (
     RobotRuntimeConfig,
     RuntimeConfig,
 )
-from .task import DebugConfig, SonicTaskConfig, TaskConfig, WaistLocomotionTaskConfig
+from .task import DebugConfig, HoldPositionTaskConfig, SonicTaskConfig, TaskConfig, WaistLocomotionTaskConfig
 
 __all__ = [
     "ActionMaskConfig",
     "DebugConfig",
     "GuardConfig",
+    "HoldPositionTaskConfig",
     "InferenceConfig",
     "InputParameter",
     "JoystickInput",
