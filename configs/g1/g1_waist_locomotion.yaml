@@ -12,27 +12,35 @@ inputs:
   parameter: {name: y, min: -1.0, max: 1.0, default: 0.0}
 - type: slider
   parameter: {name: z, min: -1.0, max: 1.0, default: 0.0}
+- type: slider
+  parameter: {name: height_delta, min: -0.1, max: 0.1, default: 0.0}
 observation:
   obs_dict:
     actor_obs:
     - actions
     - base_ang_vel
+    - base_right_foot_height_difference
     - dof_pos
     - dof_vel
+    - pelvis_orientation_error
     - pelvis_sine_command
     - projected_gravity
   obs_dims:
     actions: 29
     base_ang_vel: 3
+    base_right_foot_height_difference: 1
     dof_pos: 29
     dof_vel: 29
-    pelvis_sine_command: 7
+    pelvis_orientation_error: 3
+    pelvis_sine_command: 8
     projected_gravity: 3
   obs_scales:
     actions: 1.0
     base_ang_vel: 0.25
+    base_right_foot_height_difference: 1.0
     dof_pos: 1.0
     dof_vel: 0.05
+    pelvis_orientation_error: 1.0
     pelvis_sine_command: 1.0
     projected_gravity: 1.0
   history_length_dict:
@@ -51,7 +59,7 @@ task:
   desired_base_height: 0.75
   residual_upper_body_action: false
   print_observations: false
-  motion_data_path: reference/knee_down/knee_down.npz
+  motion_data_path: reference/standup2kneeling/standup2kneeling.npz
   motion_start_timestep: 0
   motion_end_timestep: null
   motion_loop: false

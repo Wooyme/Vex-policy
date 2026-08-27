@@ -8,4 +8,5 @@ dist/
 *.egg-info/
 .coverage
 .idea/
-models/sonic/*.onnx
+models/
+reference/

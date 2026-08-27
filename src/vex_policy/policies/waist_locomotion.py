@@ -9,6 +9,7 @@ from typing import ClassVar
 
 import numpy as np
 import onnx
+import pinocchio as pin
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from vex_policy.config.config_types import (
@@ -31,6 +32,7 @@ class WaistInitialPose(BaseModel):
 
     dof_names: tuple[str, ...]
     dof_pos: tuple[float, ...]
+    root_quat_wxyz: tuple[float, float, float, float]
     projected_gravity: tuple[float, float, float]
 
     @model_validator(mode="after")
@@ -39,9 +41,12 @@ class WaistInitialPose(BaseModel):
             raise ValueError("dof_names and dof_pos must have the same non-zero length")
         if len(set(self.dof_names)) != len(self.dof_names):
             raise ValueError("dof_names must not contain duplicates")
-        values = np.asarray((*self.dof_pos, *self.projected_gravity), dtype=np.float64)
+        values = np.asarray((*self.dof_pos, *self.root_quat_wxyz, *self.projected_gravity), dtype=np.float64)
         if not np.isfinite(values).all():
             raise ValueError("initial pose values must be finite")
+        quaternion_norm = float(np.linalg.norm(self.root_quat_wxyz))
+        if not np.isclose(quaternion_norm, 1.0, atol=1e-3):
+            raise ValueError("root_quat_wxyz must be a unit quaternion")
         gravity_norm = float(np.linalg.norm(self.projected_gravity))
         if not np.isclose(gravity_norm, 1.0, atol=1e-3):
             raise ValueError("projected_gravity must be a unit vector")
@@ -68,21 +73,52 @@ def load_waist_motion_last_pose(path: str | Path) -> WaistInitialPose:
     expected_width = len(joint_names) + 7
     if joint_pos.ndim != 2 or joint_pos.shape[0] == 0 or joint_pos.shape[1] != expected_width:
         raise ValueError(
-            "Waist locomotion joint_pos must have shape "
-            f"(frames, 7 + {len(joint_names)}), got {joint_pos.shape}"
+            f"Waist locomotion joint_pos must have shape (frames, 7 + {len(joint_names)}), got {joint_pos.shape}"
         )
     final_pose = joint_pos[-1]
-    root_quat_xyzw = final_pose[3:7]
-    quaternion_norm = float(np.linalg.norm(root_quat_xyzw))
+    root_quat_wxyz = final_pose[3:7]
+    quaternion_norm = float(np.linalg.norm(root_quat_wxyz))
     if not np.isfinite(quaternion_norm) or quaternion_norm < 1e-8:
         raise ValueError("Waist locomotion final-frame root quaternion is invalid")
-    root_quat_wxyz = (root_quat_xyzw / quaternion_norm)[[3, 0, 1, 2]].reshape(1, 4)
+    root_quat_wxyz = (root_quat_wxyz / quaternion_norm).reshape(1, 4)
     projected_gravity = quat_rotate_inverse(root_quat_wxyz, np.asarray([[0.0, 0.0, -1.0]]))[0]
     return WaistInitialPose(
         dof_names=joint_names,
         dof_pos=tuple(final_pose[7:]),
+        root_quat_wxyz=tuple(root_quat_wxyz[0]),
         projected_gravity=tuple(projected_gravity),
     )
+
+
+def _quat_to_rotation_vector(quaternion_wxyz: np.ndarray) -> np.ndarray:
+    """Convert normalized WXYZ quaternions to shortest-path rotation vectors."""
+    quaternion = np.asarray(quaternion_wxyz, dtype=np.float64)
+    quaternion *= np.where(quaternion[:, :1] < 0.0, -1.0, 1.0)
+    vector = quaternion[:, 1:]
+    magnitude = np.linalg.norm(vector, axis=1)
+    half_angle = np.arctan2(magnitude, quaternion[:, 0])
+    angle = 2.0 * half_angle
+    scale = np.empty_like(angle)
+    regular = np.abs(angle) > 1e-8
+    scale[regular] = angle[regular] / np.sin(half_angle[regular])
+    scale[~regular] = 1.0 / (0.5 - angle[~regular] ** 2 / 48.0)
+    return vector * scale[:, None]
+
+
+def _relative_rotation_vector(initial_wxyz: np.ndarray, current_wxyz: np.ndarray) -> np.ndarray:
+    """Return ``initial^-1 * current`` as a shortest-path rotation vector."""
+    initial_scalar, initial_vector = initial_wxyz[:, :1], initial_wxyz[:, 1:]
+    current_scalar, current_vector = current_wxyz[:, :1], current_wxyz[:, 1:]
+    relative_quat = np.concatenate(
+        (
+            initial_scalar * current_scalar + np.sum(initial_vector * current_vector, axis=1, keepdims=True),
+            initial_scalar * current_vector
+            - current_scalar * initial_vector
+            - np.cross(initial_vector, current_vector),
+        ),
+        axis=1,
+    )
+    return _quat_to_rotation_vector(relative_quat)
 
 
 class WaistLocomotionPolicy(BasePolicy):
@@ -91,16 +127,20 @@ class WaistLocomotionPolicy(BasePolicy):
     _OBS_DIMS: ClassVar[dict[str, int]] = {
         "actions": 29,
         "base_ang_vel": 3,
+        "base_right_foot_height_difference": 1,
         "dof_pos": 29,
         "dof_vel": 29,
-        "pelvis_sine_command": 7,
+        "pelvis_orientation_error": 3,
+        "pelvis_sine_command": 8,
         "projected_gravity": 3,
     }
     _OBS_SCALES: ClassVar[dict[str, float]] = {
         "actions": 1.0,
         "base_ang_vel": 0.25,
+        "base_right_foot_height_difference": 1.0,
         "dof_pos": 1.0,
         "dof_vel": 0.05,
+        "pelvis_orientation_error": 1.0,
         "pelvis_sine_command": 1.0,
         "projected_gravity": 1.0,
     }
@@ -113,14 +153,19 @@ class WaistLocomotionPolicy(BasePolicy):
         if not all(isinstance(component, SliderInput) for component in config.inputs):
             raise ValueError("Waist locomotion inputs must contain only sliders")
         parameters = {parameter.name: parameter for parameter in input_parameters(config.inputs)}
-        expected_parameters = {"amplitude", "frequency", "x", "y", "z"}
+        expected_parameters = {
+            "amplitude",
+            "frequency",
+            "height_delta",
+            "x",
+            "y",
+            "z",
+        }
         if set(parameters) != expected_parameters:
             raise ValueError(f"Waist locomotion inputs must be {sorted(expected_parameters)}")
         if parameters["amplitude"].min <= 0.0 or parameters["frequency"].min <= 0.0:
             raise ValueError("Waist locomotion amplitude and frequency ranges must be positive")
-        default_direction = np.asarray(
-            [parameters[name].default for name in ("x", "y", "z")], dtype=np.float32
-        )
+        default_direction = np.asarray([parameters[name].default for name in ("x", "y", "z")], dtype=np.float32)
         if np.linalg.norm(default_direction) < 1e-8:
             raise ValueError("Waist locomotion default direction must be non-zero")
         self.waist_input_parameters = parameters
@@ -156,13 +201,15 @@ class WaistLocomotionPolicy(BasePolicy):
             actual_scale = self.obs_scales.get(term)
             if actual_scale is None or not np.isclose(actual_scale, self._OBS_SCALES[term]):
                 raise ValueError(f"Waist locomotion observation {term!r} must use scale {self._OBS_SCALES[term]}")
-        if self.obs_dim_dict["actor_obs"] != 100:
-            raise ValueError("Waist locomotion actor_obs must have dimension 100")
+        if self.obs_dim_dict["actor_obs"] != 105:
+            raise ValueError("Waist locomotion actor_obs must have dimension 105")
 
     def _init_command_components(self) -> None:
         super()._init_command_components()
         self.pelvis_sine_phase = 0.0
-        self.pelvis_sine_command = np.zeros((1, 7), dtype=np.float32)
+        self.pelvis_sine_command = np.zeros((1, 8), dtype=np.float32)
+        self.pelvis_orientation_reference_quat: np.ndarray | None = None
+        self.initial_base_right_foot_height_difference: float | None = None
         self._reset_pelvis_sine_command()
 
     def _init_phase_components(self) -> None:
@@ -170,13 +217,23 @@ class WaistLocomotionPolicy(BasePolicy):
         if not self.use_phase:
             raise ValueError("Waist locomotion requires task.use_phase=true")
 
+    def _reset_inference_episode_state(self) -> None:
+        """Remove action and observation state carried over from a prior activation."""
+
+        self.last_policy_action.fill(0.0)
+        self.scaled_policy_action.fill(0.0)
+        for group_buffers in self.obs_history_buffers.values():
+            for buffer in group_buffers.values():
+                buffer.clear()
+        self.obs_buf_dict = {group: np.zeros_like(buffer) for group, buffer in self.obs_buf_dict.items()}
+
     def setup_policy(self, model_path) -> None:
         super().setup_policy(model_path)
         inputs = self.onnx_policy_session.get_inputs()
         outputs = self.onnx_policy_session.get_outputs()
-        if len(inputs) != 1 or inputs[0].name != "actor_obs" or list(inputs[0].shape) != [1, 100]:
+        if len(inputs) != 1 or inputs[0].name != "actor_obs" or list(inputs[0].shape) != [1, 105]:
             exposed = [(item.name, item.shape) for item in inputs]
-            raise ValueError(f"Waist locomotion model must expose actor_obs[1, 100], got {exposed}")
+            raise ValueError(f"Waist locomotion model must expose actor_obs[1, 105], got {exposed}")
         if len(outputs) != 1 or outputs[0].name != "action" or list(outputs[0].shape) != [1, 29]:
             exposed = [(item.name, item.shape) for item in outputs]
             raise ValueError(f"Waist locomotion model must expose action[1, 29], got {exposed}")
@@ -195,6 +252,51 @@ class WaistLocomotionPolicy(BasePolicy):
                 f"({self.config.task.policy_action_scale})"
             )
 
+        robot_urdf = metadata.get("robot_urdf")
+        if not isinstance(robot_urdf, str) or not robot_urdf.strip():
+            raise ValueError("Waist locomotion ONNX must contain non-empty robot_urdf metadata")
+        try:
+            kinematics_model = pin.buildModelFromXML(robot_urdf)
+        except Exception as error:
+            raise ValueError(f"Failed to build waist locomotion kinematics from ONNX robot_urdf: {error}") from error
+
+        q_indices: list[int] = []
+        for name in self.dof_names:
+            joint_id = kinematics_model.getJointId(name)
+            if joint_id == 0 or kinematics_model.names[joint_id] != name:
+                raise ValueError(f"Waist locomotion robot_urdf is missing joint {name!r}")
+            joint = kinematics_model.joints[joint_id]
+            if joint.nq != 1:
+                raise ValueError(f"Waist locomotion robot_urdf joint {name!r} must have one configuration value")
+            q_indices.append(joint.idx_q)
+
+        ankle_frame_id = kinematics_model.getFrameId("right_ankle_roll_link", pin.FrameType.BODY)
+        if ankle_frame_id >= kinematics_model.nframes:
+            raise ValueError("Waist locomotion robot_urdf is missing body frame 'right_ankle_roll_link'")
+        self._kinematics_model = kinematics_model
+        self._kinematics_data = kinematics_model.createData()
+        self._kinematics_q_indices = np.asarray(q_indices, dtype=np.int64)
+        self._right_ankle_frame_id = ankle_frame_id
+
+    def _capture_policy_state(self) -> dict:
+        state = super()._capture_policy_state()
+        state.update(
+            {
+                "kinematics_model": self._kinematics_model,
+                "kinematics_data": self._kinematics_data,
+                "kinematics_q_indices": self._kinematics_q_indices,
+                "right_ankle_frame_id": self._right_ankle_frame_id,
+            }
+        )
+        return state
+
+    def _restore_policy_state(self, state: dict) -> None:
+        super()._restore_policy_state(state)
+        self._kinematics_model = state["kinematics_model"]
+        self._kinematics_data = state["kinematics_data"]
+        self._kinematics_q_indices = state["kinematics_q_indices"]
+        self._right_ankle_frame_id = state["right_ankle_frame_id"]
+
     def _reset_pelvis_sine_command(self) -> None:
         self.pelvis_sine_phase = 0.0
         direction = np.asarray(
@@ -202,15 +304,36 @@ class WaistLocomotionPolicy(BasePolicy):
             dtype=np.float32,
         )
         direction /= np.linalg.norm(direction)
+        initial_height = self.initial_base_right_foot_height_difference or 0.0
         self.pelvis_sine_command[0] = (
             0.0,
             1.0,
             self.waist_input_parameters["amplitude"].default,
             self.waist_input_parameters["frequency"].default,
             *direction,
+            initial_height + self.waist_input_parameters["height_delta"].default,
         )
 
     def _handle_start_policy(self) -> None:
+        robot_state_data = self.interface.get_low_state()
+        if robot_state_data is None:
+            raise RuntimeError("Cannot capture pelvis orientation: low-level robot state is unavailable")
+        robot_state_data = np.asarray(robot_state_data)
+        if robot_state_data.ndim != 2 or robot_state_data.shape[0] != 1 or robot_state_data.shape[1] < 7:
+            raise RuntimeError(
+                f"Cannot capture pelvis orientation from robot state with shape {robot_state_data.shape}"
+            )
+        reference_quat = np.asarray(robot_state_data[:, 3:7], dtype=np.float64)
+        reference_norm = np.linalg.norm(reference_quat, axis=1, keepdims=True)
+        if not np.isfinite(reference_quat).all() or np.any(reference_norm < 1e-8):
+            raise RuntimeError("Cannot capture pelvis orientation from an invalid quaternion")
+        self.pelvis_orientation_reference_quat = reference_quat / reference_norm
+        base_observations = super().get_current_obs_buffer_dict(robot_state_data)
+        initial_height = self._base_right_foot_height_difference(
+            robot_state_data, base_observations["projected_gravity"]
+        )
+        self.initial_base_right_foot_height_difference = float(initial_height[0, 0])
+        self._reset_inference_episode_state()
         self._reset_pelvis_sine_command()
         super()._handle_start_policy()
 
@@ -233,10 +356,50 @@ class WaistLocomotionPolicy(BasePolicy):
             )
             direction_norm = float(np.linalg.norm(direction))
         direction /= direction_norm
-        self.pelvis_sine_command[0, 2:] = (amplitude, frequency, *direction)
+        initial_height = self.initial_base_right_foot_height_difference
+        if initial_height is None:
+            raise RuntimeError("Initial base-right-foot height is unavailable; activate the policy first")
+        target_height = initial_height + float(control["height_delta"])
+        self.pelvis_sine_command[0, 2:] = (amplitude, frequency, *direction, target_height)
+
+    def _base_right_foot_height_difference(
+        self, robot_state_data: np.ndarray, projected_gravity: np.ndarray
+    ) -> np.ndarray:
+        """Solve base-minus-right-ankle world height from joints and IMU gravity."""
+
+        state = np.asarray(robot_state_data)
+        gravity_b = np.asarray(projected_gravity, dtype=np.float64)
+        if state.ndim != 2 or state.shape[0] != 1 or state.shape[1] < 7 + self.num_dofs:
+            raise ValueError(f"Cannot solve right-ankle kinematics from robot state with shape {state.shape}")
+        if gravity_b.shape != (1, 3) or not np.isfinite(gravity_b).all():
+            raise ValueError("Cannot solve right-ankle height with invalid projected gravity")
+
+        joint_pos = np.asarray(state[0, 7 : 7 + self.num_dofs], dtype=np.float64)
+        if not np.isfinite(joint_pos).all():
+            raise ValueError("Cannot solve right-ankle height with invalid joint positions")
+        q = pin.neutral(self._kinematics_model)
+        q[self._kinematics_q_indices] = joint_pos
+        pin.forwardKinematics(self._kinematics_model, self._kinematics_data, q)
+        ankle_placement = pin.updateFramePlacement(
+            self._kinematics_model, self._kinematics_data, self._right_ankle_frame_id
+        )
+        ankle_position_b = np.asarray(ankle_placement.translation, dtype=np.float64)
+
+        # projected_gravity is world-down expressed in the base frame. Its dot
+        # product with (ankle - base) is therefore base_z - ankle_z in world.
+        return np.asarray([[np.dot(gravity_b[0], ankle_position_b)]], dtype=np.float64)
 
     def get_current_obs_buffer_dict(self, robot_state_data):
         observations = super().get_current_obs_buffer_dict(robot_state_data)
         observations["actions"] = self.last_policy_action
+        observations["base_right_foot_height_difference"] = self._base_right_foot_height_difference(
+            robot_state_data, observations["projected_gravity"]
+        )
+        current_quat = np.asarray(robot_state_data[:, 3:7], dtype=np.float64)
+        current_quat /= np.linalg.norm(current_quat, axis=1, keepdims=True).clip(min=1e-8)
+        reference_quat = self.pelvis_orientation_reference_quat
+        if reference_quat is None:
+            raise RuntimeError("Pelvis orientation reference is unavailable; activate the policy first")
+        observations["pelvis_orientation_error"] = _relative_rotation_vector(reference_quat, current_quat)
         observations["pelvis_sine_command"] = self.pelvis_sine_command
         return observations

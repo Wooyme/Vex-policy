@@ -115,19 +115,24 @@ task:
 不会写入合成命令，因此可由另一身体区域的策略接管。`lower_body`/`upper_body` 的未屏蔽关节不得越过各自区域。
 
 Holosoma `waist_loco` 分支的 pelvis-sine 策略使用独立示例
-`configs/examples/g1_waist_locomotion.yaml`。将对应的 100→29 ONNX 模型复制为
+`configs/examples/g1_waist_locomotion.yaml`。将对应的 105→29 ONNX 模型复制为
 `models/loco/g1_29dof/ppo_g1_waist.onnx` 后，可通过
 `vex-policy --config configs/examples/g1_waist_locomotion.yaml` 单独启动。该策略保留模型的全 29 维输出，
 并使用 `motion_data_path` 所指 NPZ motion 的最后一帧作为关节残差零位；激活前会检查当前关节和机身倾斜
-是否接近该帧。motion 必须包含带根姿态的 `joint_pos` 和可用于关节重排的 `joint_names`。启动检查由独立的
+是否接近该帧。motion 必须包含根姿态格式为 `[xyz,wxyz]` 的 `joint_pos` 和可用于关节重排的 `joint_names`。
+启动检查由独立的
 `WaistLocomotionGuard` 执行，其关节和重力误差阈值配置在 policy YAML 顶层的 `guard` 中。
 
-waist locomotion 将五个真实物理量分别声明为滑条：`amplitude` 范围 `[0.05,0.20]`、默认 `0.125`，
+waist locomotion 将六个真实物理量分别声明为滑条：`amplitude` 范围 `[0.05,0.20]`、默认 `0.125`，
 `frequency` 范围 `[0.2,2.0]`、默认 `1.1`，方向 `x/y/z` 范围均为 `[-1,1]`、默认
-`[1,0,0]`。方向在策略内归一化，全零方向回退到配置的默认方向。这些范围和默认值只在 `inputs` 中
+`[1,0,0]`，基座相对右脚踝高度增量 `height_delta` 范围为 `[-0.1,0.1]` 米、默认 `0`。方向在策略内归一化，
+全零方向回退到配置的默认方向。这些范围和默认值只在 `inputs` 中
 配置，不在 task 中重复。waist locomotion 的 `motion_data_path` 与 `model_path` 一样相对进程当前工作目录
 解析。pelvis command 开头的 `sin_phase`/`cos_phase` 由策略按当前频率和 `rl_rate` 内部推进，不占用额外
-MQTT 参数。
+MQTT 参数。`pelvis_orientation_error` 以每次策略成功启动时机器人的真实 quaternion 为参考，因此允许启动
+姿态与 motion 中的根 quaternion 不一致；策略停用后再次启动会重新采样该参考姿态。命令中的目标高度差以
+启动瞬间的高度差加 `height_delta` 得到；当前高度差 observation 使用 ONNX 内嵌 URDF 对关节角做正运动学，
+并与 IMU 投影重力结合求出，因此部署时不依赖无法观测的基座或脚踝绝对世界高度。
 
 ## Enhanced inputs
 
