@@ -30,6 +30,7 @@ from vex_policy.policies.sonic_planner import (
     quaternion_multiply,
     quaternion_slerp,
 )
+from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.math.quat import quat_rotate_inverse
 
 _SESSION_CACHE: dict[tuple[str, tuple[str, ...]], onnxruntime.InferenceSession] = {}
@@ -404,13 +405,13 @@ class SonicPolicy(BasePolicy):
             self._heading_reference_initial = motion.root_quaternions[0].copy()
         return motion
 
-    def _append_history(self, robot_state_data: np.ndarray) -> None:
-        q_hw = robot_state_data[0, 7: 7 + self.num_dofs]
-        dq_hw = robot_state_data[0, 7 + self.num_dofs + 6: 7 + self.num_dofs + 6 + self.num_dofs]
+    def _append_history(self, robot_state_data: LowState) -> None:
+        q_hw = robot_state_data.joint_pos[0]
+        dq_hw = robot_state_data.joint_vel[0]
         q_policy = q_hw[POLICY_TO_HW] - self.default_dof_angles[POLICY_TO_HW]
         dq_policy = dq_hw[POLICY_TO_HW]
-        angular_velocity = robot_state_data[0, 7 + self.num_dofs + 3: 7 + self.num_dofs + 6]
-        quaternion = robot_state_data[:, 3:7]
+        angular_velocity = robot_state_data.base_ang_vel[0]
+        quaternion = robot_state_data.base_quat
         gravity = quat_rotate_inverse(quaternion, np.asarray([[0.0, 0.0, -1.0]], dtype=np.float32))[0]
         self._state_history.append(
             (
@@ -457,10 +458,10 @@ class SonicPolicy(BasePolicy):
         observation[601:661] = quaternion_matrix(relative)[..., :2].reshape(-1)
         return observation.reshape(1, -1)
 
-    def rl_inference(self, robot_state_data):
+    def rl_inference(self, robot_state_data: LowState):
         self._append_history(robot_state_data)
-        quaternion = np.asarray(robot_state_data[0, 3:7], dtype=np.float32)
-        joint_positions_hw = np.asarray(robot_state_data[0, 7: 7 + self.num_dofs], dtype=np.float32)
+        quaternion = np.asarray(robot_state_data.base_quat[0], dtype=np.float32)
+        joint_positions_hw = np.asarray(robot_state_data.joint_pos[0], dtype=np.float32)
         if self.sonic_task.motion_source == "planner":
             self._planner_robot_state = (quaternion.copy(), joint_positions_hw.copy())
             self._planner_wakeup.set()

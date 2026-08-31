@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from vex_policy.config.config_types import WaistLocomotionGuardConfig
+from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.math.quat import quat_rotate_inverse
 
 from .base import BaseGuard
@@ -21,37 +22,23 @@ class WaistLocomotionGuard(BaseGuard):
         self.policy.logger.warning(reason)
         return False, reason
 
-    def _current_projected_gravity(self, robot_state_data: np.ndarray) -> np.ndarray:
-        base_state_size = 7 + self.policy.num_dofs + 6 + self.policy.num_dofs
-        if robot_state_data.shape[1] == base_state_size + 3:
-            gravity = np.asarray(robot_state_data[0, base_state_size : base_state_size + 3], dtype=np.float64)
-        else:
-            quaternion = np.asarray(robot_state_data[:, 3:7], dtype=np.float64)
-            quaternion_norm = np.linalg.norm(quaternion, axis=1, keepdims=True)
-            if not np.isfinite(quaternion_norm).all() or np.any(quaternion_norm < 1e-8):
-                raise ValueError("robot base quaternion is invalid")
-            quaternion /= quaternion_norm
-            gravity = quat_rotate_inverse(quaternion, np.asarray([[0.0, 0.0, -1.0]]))[0]
+    def _current_projected_gravity(self, robot_state_data: LowState) -> np.ndarray:
+        quaternion = np.asarray(robot_state_data.base_quat, dtype=np.float64).copy()
+        quaternion_norm = np.linalg.norm(quaternion, axis=1, keepdims=True)
+        if not np.isfinite(quaternion_norm).all() or np.any(quaternion_norm < 1e-8):
+            raise ValueError("robot base quaternion is invalid")
+        quaternion /= quaternion_norm
+        gravity = quat_rotate_inverse(quaternion, np.asarray([[0.0, 0.0, -1.0]]))[0]
         if not np.isfinite(gravity).all():
             raise ValueError("robot projected gravity is invalid")
         return gravity
 
     def start_check(self) -> tuple[bool, str | None]:
-        robot_state_data = self.policy.interface.get_low_state()
+        robot_state_data = self.policy._read_low_state()
         if robot_state_data is None:
             return self._fail("waist_locomotion_start_check_failed: low_state_unavailable")
-        robot_state_data = np.asarray(robot_state_data)
-        minimum_state_size = 7 + self.policy.num_dofs + 6 + self.policy.num_dofs
-        if (
-            robot_state_data.ndim != 2
-            or robot_state_data.shape[0] != 1
-            or robot_state_data.shape[1] < minimum_state_size
-        ):
-            return self._fail(
-                f"waist_locomotion_start_check_failed: invalid_low_state_shape={robot_state_data.shape}"
-            )
 
-        joint_pos = robot_state_data[0, 7 : 7 + self.policy.num_dofs]
+        joint_pos = robot_state_data.joint_pos[0]
         if not np.isfinite(joint_pos).all():
             return self._fail("waist_locomotion_start_check_failed: invalid_joint_position")
         joint_errors = np.abs(joint_pos - self.policy.default_dof_angles)

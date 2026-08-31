@@ -18,6 +18,7 @@ from vex_policy.policies.locomotion import LocomotionPolicy
 from vex_policy.policies.sonic import SonicPolicy
 from vex_policy.policies.waist_locomotion import WaistLocomotionPolicy
 from vex_policy.policies.wbt import WholeBodyTrackingPolicy
+from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.rate import RateLimiter
 
 
@@ -79,6 +80,9 @@ class SwitchModePolicy:
         self.reason: str | None = "startup"
         self.last_command_seq: int | None = None
         self._last_status: tuple[Any, ...] | None = None
+
+    def _read_low_state(self) -> LowState | None:
+        return self.interface.get_low_state()
 
     def _build_policies(self) -> dict[str, BasePolicy]:
         instances: dict[str, BasePolicy] = {}
@@ -227,7 +231,7 @@ class SwitchModePolicy:
     def _publish_idle_state(self, now: float) -> None:
         if now + 1e-9 < self._next_state_publish:
             return
-        robot_state = self.interface.get_low_state()
+        robot_state = self._read_low_state()
         if robot_state is not None:
             self._maybe_publish_state(robot_state, now)
 
@@ -310,7 +314,7 @@ class SwitchModePolicy:
 
     def _step_active_policies(self) -> bool:
         """Infer all active policies from one state snapshot and publish one merged command."""
-        robot_state = self.interface.get_low_state()
+        robot_state = self._read_low_state()
         if robot_state is None:
             self._latch("low_state_unavailable")
             return False
@@ -345,7 +349,7 @@ class SwitchModePolicy:
             q,
             dq,
             tau,
-            robot_state[0, 7 : 7 + num_dofs],
+            robot_state.joint_pos[0],
             kp_override=kp,
             kd_override=kd,
         )

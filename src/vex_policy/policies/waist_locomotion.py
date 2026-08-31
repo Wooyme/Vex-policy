@@ -20,6 +20,7 @@ from vex_policy.config.config_types import (
     input_parameters,
 )
 from vex_policy.policies.guard.waist_locomotion import WaistLocomotionGuard
+from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.math.quat import quat_rotate_inverse
 
 from .base import BasePolicy
@@ -315,15 +316,10 @@ class WaistLocomotionPolicy(BasePolicy):
         )
 
     def _handle_start_policy(self) -> None:
-        robot_state_data = self.interface.get_low_state()
+        robot_state_data = self._read_low_state()
         if robot_state_data is None:
             raise RuntimeError("Cannot capture pelvis orientation: low-level robot state is unavailable")
-        robot_state_data = np.asarray(robot_state_data)
-        if robot_state_data.ndim != 2 or robot_state_data.shape[0] != 1 or robot_state_data.shape[1] < 7:
-            raise RuntimeError(
-                f"Cannot capture pelvis orientation from robot state with shape {robot_state_data.shape}"
-            )
-        reference_quat = np.asarray(robot_state_data[:, 3:7], dtype=np.float64)
+        reference_quat = np.asarray(robot_state_data.base_quat, dtype=np.float64).copy()
         reference_norm = np.linalg.norm(reference_quat, axis=1, keepdims=True)
         if not np.isfinite(reference_quat).all() or np.any(reference_norm < 1e-8):
             raise RuntimeError("Cannot capture pelvis orientation from an invalid quaternion")
@@ -363,18 +359,15 @@ class WaistLocomotionPolicy(BasePolicy):
         self.pelvis_sine_command[0, 2:] = (amplitude, frequency, *direction, target_height)
 
     def _base_right_foot_height_difference(
-        self, robot_state_data: np.ndarray, projected_gravity: np.ndarray
+        self, robot_state_data: LowState, projected_gravity: np.ndarray
     ) -> np.ndarray:
         """Solve base-minus-right-ankle world height from joints and IMU gravity."""
 
-        state = np.asarray(robot_state_data)
         gravity_b = np.asarray(projected_gravity, dtype=np.float64)
-        if state.ndim != 2 or state.shape[0] != 1 or state.shape[1] < 7 + self.num_dofs:
-            raise ValueError(f"Cannot solve right-ankle kinematics from robot state with shape {state.shape}")
         if gravity_b.shape != (1, 3) or not np.isfinite(gravity_b).all():
             raise ValueError("Cannot solve right-ankle height with invalid projected gravity")
 
-        joint_pos = np.asarray(state[0, 7 : 7 + self.num_dofs], dtype=np.float64)
+        joint_pos = np.asarray(robot_state_data.joint_pos[0], dtype=np.float64)
         if not np.isfinite(joint_pos).all():
             raise ValueError("Cannot solve right-ankle height with invalid joint positions")
         q = pin.neutral(self._kinematics_model)
@@ -389,13 +382,13 @@ class WaistLocomotionPolicy(BasePolicy):
         # product with (ankle - base) is therefore base_z - ankle_z in world.
         return np.asarray([[np.dot(gravity_b[0], ankle_position_b)]], dtype=np.float64)
 
-    def get_current_obs_buffer_dict(self, robot_state_data):
+    def get_current_obs_buffer_dict(self, robot_state_data: LowState):
         observations = super().get_current_obs_buffer_dict(robot_state_data)
         observations["actions"] = self.last_policy_action
         observations["base_right_foot_height_difference"] = self._base_right_foot_height_difference(
             robot_state_data, observations["projected_gravity"]
         )
-        current_quat = np.asarray(robot_state_data[:, 3:7], dtype=np.float64)
+        current_quat = np.asarray(robot_state_data.base_quat, dtype=np.float64).copy()
         current_quat /= np.linalg.norm(current_quat, axis=1, keepdims=True).clip(min=1e-8)
         reference_quat = self.pelvis_orientation_reference_quat
         if reference_quat is None:

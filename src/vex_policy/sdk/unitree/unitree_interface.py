@@ -3,7 +3,7 @@
 import numpy as np
 
 from vex_policy.config.config_types import RobotConfig
-from vex_policy.sdk.base.base_interface import BaseInterface
+from vex_policy.sdk.base.base_interface import BaseInterface, LowState
 
 
 class UnitreeInterface(BaseInterface):
@@ -42,26 +42,36 @@ class UnitreeInterface(BaseInterface):
         if self.robot_config.robot.lower() == "go2":
             self._unitree_motor_order = (3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8)
 
-    def get_low_state(self) -> np.ndarray:
-        """Get robot state as numpy array."""
+    def get_low_state(self) -> LowState | None:
+        """Get the latest raw robot state in hardware joint order."""
         state = self.unitree_interface.read_low_state()
-        base_pos = np.zeros(3)
-        quat = np.array(state.imu.quat)
+        if state is None:
+            return None
+
+        base_pos = np.zeros((1, 3))
+        quat = np.asarray(state.imu.quat).reshape(1, 4)
         motor_pos = np.array(state.motor.q)
-        base_lin_vel = np.zeros(3)
-        base_ang_vel = np.array(state.imu.omega)
+        base_lin_vel = np.zeros((1, 3))
+        base_ang_vel = np.asarray(state.imu.omega).reshape(1, 3)
         motor_vel = np.array(state.motor.dq)
 
-        joint_pos = np.zeros(self.robot_config.num_joints)
-        joint_vel = np.zeros(self.robot_config.num_joints)
+        joint_pos = np.zeros((1, self.robot_config.num_joints))
+        joint_vel = np.zeros((1, self.robot_config.num_joints))
         motor_order = self._unitree_motor_order or self.robot_config.joint2motor
 
         for j_id in range(self.robot_config.num_joints):
             m_id = motor_order[j_id]
-            joint_pos[j_id] = float(motor_pos[m_id])
-            joint_vel[j_id] = float(motor_vel[m_id])
+            joint_pos[0, j_id] = float(motor_pos[m_id])
+            joint_vel[0, j_id] = float(motor_vel[m_id])
 
-        return np.concatenate([base_pos, quat, joint_pos, base_lin_vel, base_ang_vel, joint_vel]).reshape(1, -1)
+        return LowState(
+            base_pos=base_pos,
+            base_quat=quat,
+            joint_pos=joint_pos,
+            base_lin_vel=base_lin_vel,
+            base_ang_vel=base_ang_vel,
+            joint_vel=joint_vel,
+        )
 
     def send_low_command(
         self,

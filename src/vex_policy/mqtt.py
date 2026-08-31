@@ -18,6 +18,7 @@ import paho.mqtt.client as mqtt
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from vex_policy.config.config_types import MqttConfig, PolicySpec
+from vex_policy.sdk.base.base_interface import LowState
 
 InputValue = Annotated[float, Field(allow_inf_nan=False)]
 
@@ -134,7 +135,7 @@ def parse_broker(value: str) -> BrokerEndpoint:
 
 
 def encode_robot_state(
-    robot_state: np.ndarray,
+    robot_state: LowState | np.ndarray,
     joint_names: Iterable[str],
     *,
     started_at: float,
@@ -143,18 +144,30 @@ def encode_robot_state(
 ) -> str:
     """Encode the exact state shape consumed by the control panel and simulator."""
     names = list(joint_names)
-    state = np.asarray(robot_state, dtype=np.float64).reshape(-1)
-    required = 7 + len(names)
-    if state.size < required:
-        raise ValueError(f"robot state needs at least {required} values, got {state.size}")
+    if isinstance(robot_state, LowState):
+        if robot_state.joint_pos.shape[1] != len(names):
+            raise ValueError(
+                f"robot state needs {len(names)} joint values, got {robot_state.joint_pos.shape[1]}"
+            )
+        base_xyz = np.asarray(robot_state.base_pos, dtype=np.float64).reshape(-1)
+        base_quat_wxyz = np.asarray(robot_state.base_quat, dtype=np.float64).reshape(-1)
+        joint_values = np.asarray(robot_state.joint_pos, dtype=np.float64).reshape(-1)
+    else:
+        state = np.asarray(robot_state, dtype=np.float64).reshape(-1)
+        required = 7 + len(names)
+        if state.size < required:
+            raise ValueError(f"robot state needs at least {required} values, got {state.size}")
+        base_xyz = state[:3]
+        base_quat_wxyz = state[3:7]
+        joint_values = state[7:required]
     now = time.monotonic() if monotonic_now is None else monotonic_now
     payload = {
         "timestamp": time.time() if timestamp is None else timestamp,
         "simulation_time": max(0.0, now - started_at),
         "joint_names": names,
-        "joint_values": state[7:required].tolist(),
-        "base_xyz": state[:3].tolist(),
-        "base_quat_wxyz": state[3:7].tolist(),
+        "joint_values": joint_values.tolist(),
+        "base_xyz": base_xyz.tolist(),
+        "base_quat_wxyz": base_quat_wxyz.tolist(),
     }
     return json.dumps(payload, separators=(",", ":"), allow_nan=False)
 

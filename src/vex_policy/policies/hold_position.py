@@ -8,6 +8,7 @@ import numpy as np
 from loguru import logger
 
 from vex_policy.config.config_types import HoldPositionTaskConfig, InferenceConfig
+from vex_policy.sdk.base.base_interface import LowState
 
 from .base import BasePolicy, PolicyJointCommand
 
@@ -43,14 +44,10 @@ class HoldPositionPolicy(BasePolicy):
     def activate(self) -> str | None:
         """Capture the current DOF positions and begin holding them."""
         self.held_dof_pos = None
-        robot_state = self.interface.get_low_state()
+        robot_state = self._read_low_state()
         if robot_state is None:
             return "hold_position_start_failed: low_state_unavailable"
-        state = np.asarray(robot_state)
-        required = 7 + self.num_dofs
-        if state.ndim != 2 or state.shape[0] != 1 or state.shape[1] < required:
-            return f"hold_position_start_failed: invalid_low_state_shape={state.shape}"
-        dof_pos = np.asarray(state[0, 7:required], dtype=np.float64)
+        dof_pos = np.asarray(robot_state.joint_pos[0], dtype=np.float64)
         if not np.isfinite(dof_pos).all():
             return "hold_position_start_failed: invalid_dof_pos"
         self.held_dof_pos = dof_pos.copy()
@@ -78,7 +75,7 @@ class HoldPositionPolicy(BasePolicy):
         """The hold policy has no runtime control parameters."""
         del control
 
-    def compute_joint_command(self, robot_state_data: np.ndarray) -> PolicyJointCommand:
+    def compute_joint_command(self, robot_state_data: LowState) -> PolicyJointCommand:
         """Return the captured pose in the shared pre-offset command convention."""
         del robot_state_data
         if self.held_dof_pos is None:

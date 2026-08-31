@@ -1,30 +1,30 @@
-name: g1-waist-locomotion
+name: ppo-ridding1
 implementation: waist_locomotion
 type: full_body
 inputs:
-- type: slider
-  parameter: {name: amplitude, min: 0.05, max: 0.20, default: 0.125}
-- type: slider
-  parameter: {name: frequency, min: 0.2, max: 2.0, default: 1.1}
-- type: slider
-  parameter: {name: x, min: -1.0, max: 1.0, default: 1.0}
-- type: slider
-  parameter: {name: y, min: -1.0, max: 1.0, default: 0.0}
-- type: slider
-  parameter: {name: z, min: -1.0, max: 1.0, default: 0.0}
-- type: slider
-  parameter: {name: height_delta, min: -0.1, max: 0.1, default: 0.0}
+  - type: slider
+    parameter: { name: amplitude, min: 0.05, max: 0.20, default: 0.125 }
+  - type: slider
+    parameter: { name: frequency, min: 0.2, max: 2.0, default: 1.1 }
+  - type: slider
+    parameter: { name: x, min: -1.0, max: 1.0, default: 1.0 }
+  - type: slider
+    parameter: { name: y, min: -1.0, max: 1.0, default: 0.0 }
+  - type: slider
+    parameter: { name: z, min: -1.0, max: 1.0, default: 0.0 }
+  - type: slider
+    parameter: { name: height_delta, min: -0.1, max: 0.1, default: 0.0 }
 observation:
   obs_dict:
     actor_obs:
-    - actions
-    - base_ang_vel
-    - base_right_foot_height_difference
-    - dof_pos
-    - dof_vel
-    - pelvis_orientation_error
-    - pelvis_sine_command
-    - projected_gravity
+      - actions
+      - base_ang_vel
+      - base_right_foot_height_difference
+      - dof_pos
+      - dof_vel
+      - pelvis_orientation_error
+      - pelvis_sine_command
+      - projected_gravity
   obs_dims:
     actions: 29
     base_ang_vel: 3
@@ -46,7 +46,7 @@ observation:
   history_length_dict:
     actor_obs: 1
 task:
-  model_path: models/loco/g1_29dof/ppo_g1_waist.onnx
+  model_path: models/loco/g1_29dof/ppo_ridding1.onnx
   action_mask_path: null
   rl_rate: 50.0
   policy_action_scale: 0.25
@@ -59,7 +59,7 @@ task:
   desired_base_height: 0.75
   residual_upper_body_action: false
   print_observations: false
-  motion_data_path: reference/standup2kneeling/standup2kneeling.npz
+  motion_data_path: reference/standup2lyingback/standup2lyingback.npz
   motion_start_timestep: 0
   motion_end_timestep: null
   motion_loop: false

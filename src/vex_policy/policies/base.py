@@ -17,6 +17,7 @@ from vex_policy.config.config_types.inference import InferenceConfig
 from vex_policy.config.config_types.robot import RobotConfig
 from vex_policy.inputs.api.commands import VelCmd
 from vex_policy.sdk import create_interface
+from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.latency import LatencyTracker
 from vex_policy.utils.math.quat import quat_rotate_inverse
 
@@ -187,6 +188,9 @@ class BasePolicy:
                 getattr(self.config.task, "lowcmd_publish_rate", 500.0),
                 getattr(self.config.task, "low_state_timeout_s", 0.1),
             )
+
+    def _read_low_state(self) -> LowState | None:
+        return self.interface.get_low_state()
 
     def _init_policy_components(self, model_path, policy_action_scale, rl_rate):
         """Initialize policy-related components."""
@@ -464,30 +468,21 @@ class BasePolicy:
     # Observation Processing Methods
     # ============================================================================
 
-    def get_current_obs_buffer_dict(self, robot_state_data):
+    def get_current_obs_buffer_dict(self, robot_state_data: LowState):
         """Extract current observation data from robot state."""
         current_obs_buffer_dict = {}
 
         # Extract base and joint data
-        current_obs_buffer_dict["base_quat"] = robot_state_data[:, 3:7]
+        current_obs_buffer_dict["base_quat"] = robot_state_data.base_quat
         if self.config.task.debug.force_zero_angular_velocity:
             current_obs_buffer_dict["base_ang_vel"] = np.zeros((1, 3))
         else:
-            current_obs_buffer_dict["base_ang_vel"] = robot_state_data[:, 7 + self.num_dofs + 3: 7 + self.num_dofs + 6]
-        current_obs_buffer_dict["dof_pos"] = robot_state_data[:, 7: 7 + self.num_dofs] - self.default_dof_angles
-        current_obs_buffer_dict["dof_vel"] = robot_state_data[
-            :, 7 + self.num_dofs + 6: 7 + self.num_dofs + 6 + self.num_dofs
-        ]
+            current_obs_buffer_dict["base_ang_vel"] = robot_state_data.base_ang_vel
+        current_obs_buffer_dict["dof_pos"] = robot_state_data.joint_pos - self.default_dof_angles
+        current_obs_buffer_dict["dof_vel"] = robot_state_data.joint_vel
 
-        # Use pre-computed corrected gravity if available from interface, else compute
-        # This logic seems very brittle. TODO: Return a dataclass instead of just a numpy array.
-        expected_len = (
-                7 + self.num_dofs + 6 + self.num_dofs
-        )  # base_pos(3) + quat(4) + dof_pos + lin_vel(3) + ang_vel(3) + dof_vel
         if self.config.task.debug.force_upright_imu:
             current_obs_buffer_dict["projected_gravity"] = np.array([[0.0, 0.0, -1.0]])
-        elif robot_state_data.shape[1] == expected_len + 3:
-            current_obs_buffer_dict["projected_gravity"] = robot_state_data[:, expected_len: expected_len + 3]
         else:
             v = np.array([[0, 0, -1]])
             current_obs_buffer_dict["projected_gravity"] = quat_rotate_inverse(current_obs_buffer_dict["base_quat"], v)
@@ -562,9 +557,9 @@ class BasePolicy:
     # Control/Command Methods
     # ============================================================================
 
-    def get_init_target(self, robot_state_data):
+    def get_init_target(self, robot_state_data: LowState):
         """Get initialization target joint positions."""
-        dof_pos = robot_state_data[:, 7: 7 + self.num_dofs]
+        dof_pos = robot_state_data.joint_pos
         if self.get_ready_state:
             # Interpolate from current dof_pos to default angles
             q_target = dof_pos + (self.default_dof_angles - dof_pos) * (self.init_count / 500)
@@ -572,7 +567,7 @@ class BasePolicy:
             return q_target
         return dof_pos
 
-    def compute_joint_command(self, robot_state_data: np.ndarray) -> PolicyJointCommand:
+    def compute_joint_command(self, robot_state_data: LowState) -> PolicyJointCommand:
         """Compute one control cycle without publishing to the hardware interface."""
         # Snapshot flags to prevent race with mode-switch handler thread
         use_policy = self.use_policy_action
@@ -594,7 +589,7 @@ class BasePolicy:
                     kp_override = manual_cmd.get("kp")
                     kd_override = manual_cmd.get("kd")
                 else:
-                    q_target = robot_state_data[:, 7: 7 + self.num_dofs]
+                    q_target = robot_state_data.joint_pos
             else:
                 # Prepare for inference - any preprocessing before RL inference
                 pass
@@ -628,7 +623,7 @@ class BasePolicy:
             controlled_joints=self.controlled_joint_mask.copy(),
         )
 
-    def send_joint_command(self, command: PolicyJointCommand, robot_state_data: np.ndarray) -> None:
+    def send_joint_command(self, command: PolicyJointCommand, robot_state_data: LowState) -> None:
         """Publish a computed command, applying calibration offsets exactly once."""
         self.cmd_q[:] = command.q + self.joint_offsets
         self.cmd_dq[:] = command.dq
@@ -639,7 +634,7 @@ class BasePolicy:
                 self.cmd_q,
                 self.cmd_dq,
                 self.cmd_tau,
-                robot_state_data[0, 7 : 7 + self.num_dofs],
+                robot_state_data.joint_pos[0],
                 kp_override=command.kp,
                 kd_override=command.kd,
             )
@@ -653,7 +648,7 @@ class BasePolicy:
     def policy_action(self):
         """Execute policy action and send commands to robot."""
         with self.latency_tracker.measure("read_state"):
-            robot_state_data = self.interface.get_low_state()
+            robot_state_data = self._read_low_state()
         if robot_state_data is None:
             stop_writer = getattr(self.interface, "stop_command_writer", None)
             if stop_writer is not None:
@@ -662,11 +657,11 @@ class BasePolicy:
         command = self.compute_joint_command(robot_state_data)
         self.send_joint_command(command, robot_state_data)
 
-    def _on_command_sent(self, cmd_q, robot_state_data) -> None:
+    def _on_command_sent(self, cmd_q, robot_state_data: LowState) -> None:
         """Hook called after each executed command is sent. Override to observe.
 
         cmd_q: (num_dofs,) full-body joint command actually sent this tick.
-        robot_state_data: (1, state_dim) latest robot state used this tick.
+        robot_state_data: latest structured robot state used this tick.
         """
 
     def _get_manual_command(self, robot_state_data):

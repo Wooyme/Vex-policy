@@ -1,10 +1,47 @@
 """Base interface for robot control."""
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import numpy as np
 
 from vex_policy.config.config_types import RobotConfig
+
+
+@dataclass(frozen=True, slots=True)
+class LowState:
+    """One batch of raw low-level robot state in hardware joint order."""
+
+    base_pos: np.ndarray
+    base_quat: np.ndarray
+    joint_pos: np.ndarray
+    base_lin_vel: np.ndarray
+    base_ang_vel: np.ndarray
+    joint_vel: np.ndarray
+
+    def __post_init__(self) -> None:
+        expected_shapes = {
+            "base_pos": (1, 3),
+            "base_quat": (1, 4),
+            "base_lin_vel": (1, 3),
+            "base_ang_vel": (1, 3),
+        }
+        for name, expected_shape in expected_shapes.items():
+            value = getattr(self, name)
+            if not isinstance(value, np.ndarray) or value.shape != expected_shape:
+                shape = getattr(value, "shape", None)
+                raise ValueError(f"LowState.{name} must have shape {expected_shape}, got {shape}")
+
+        for name in ("joint_pos", "joint_vel"):
+            value = getattr(self, name)
+            if not isinstance(value, np.ndarray) or value.ndim != 2 or value.shape[0] != 1:
+                shape = getattr(value, "shape", None)
+                raise ValueError(f"LowState.{name} must have shape (1, N), got {shape}")
+        if self.joint_pos.shape != self.joint_vel.shape:
+            raise ValueError(
+                "LowState.joint_pos and LowState.joint_vel must have matching shapes, "
+                f"got {self.joint_pos.shape} and {self.joint_vel.shape}"
+            )
 
 
 class BaseInterface(ABC):
@@ -22,25 +59,25 @@ class BaseInterface(ABC):
         self._last_key_states: dict[str, bool] = {}
 
     @abstractmethod
-    def get_low_state(self) -> np.ndarray:
+    def get_low_state(self) -> LowState | None:
         """
-        Get robot state as numpy array.
+        Get the raw low-level robot state.
 
         Returns:
-            np.ndarray with shape (1, 3+4+N+3+3+N) containing:
-            [base_pos(3), quat(4), joint_pos(N), lin_vel(3), ang_vel(3), joint_vel(N)]
+            A structured state with a WXYZ base quaternion and hardware-order
+            joints, or ``None`` when no fresh state is available.
         """
         raise NotImplementedError
 
     @abstractmethod
     def send_low_command(
-        self,
-        cmd_q: np.ndarray,
-        cmd_dq: np.ndarray,
-        cmd_tau: np.ndarray,
-        dof_pos_latest: np.ndarray = None,
-        kp_override: np.ndarray = None,
-        kd_override: np.ndarray = None,
+            self,
+            cmd_q: np.ndarray,
+            cmd_dq: np.ndarray,
+            cmd_tau: np.ndarray,
+            dof_pos_latest: np.ndarray = None,
+            kp_override: np.ndarray = None,
+            kd_override: np.ndarray = None,
     ):
         """
         Send low-level command to robot.
@@ -66,7 +103,6 @@ class BaseInterface(ABC):
             robot_config: The new robot configuration.
         """
         self.robot_config = robot_config
-
 
     @property
     @abstractmethod

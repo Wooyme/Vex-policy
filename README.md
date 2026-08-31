@@ -204,13 +204,6 @@ Unitree 低层接口当前没有世界位置估计，所以真实状态中的 `b
 - `estop=true`、合法命令超时、空 policy 和策略切换间隙都不会调用 `write_low_command`，但仍读取并发布机器人状态。
 - 急停或超时解除后不会自动恢复；必须先发送非急停空 policy，再重新选择。
 - 选择变化时仅停止被移除的实例并初始化新增实例，未变化策略保留历史与相位；切换保留一个控制周期的低层命令空档。
-
-这里的“停止”会禁用 500Hz writer 并清空缓存，机器人最终行为由固件 watchdog/当前控制模式决定。部署前必须在安全支撑环境验证固件侧行为，MQTT estop 不能代替物理急停。
-
-## Unitree SDK
-
-低层和 high-level 客户端统一使用 Unitree 官方 `unitree_sdk2_python` 提交 `65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5`。不再依赖 `far-unitree-sdk` 或 `unitree_interface` pybind 模块；需要进程隔离时仍可选择 `unitree_mp` backend。
-
 ## 验证
 
 ```bash

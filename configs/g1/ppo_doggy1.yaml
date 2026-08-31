@@ -1,0 +1,72 @@
+name: ppo-doggy1
+implementation: waist_locomotion
+type: full_body
+inputs:
+- type: slider
+  parameter: {name: amplitude, min: 0.05, max: 0.5, default: 0.05}
+- type: slider
+  parameter: {name: frequency, min: 0.2, max: 2.0, default: 1.1}
+- type: slider
+  parameter: {name: x, min: -1.0, max: 1.0, default: 1.0}
+- type: slider
+  parameter: {name: y, min: -1.0, max: 1.0, default: 0.0}
+- type: slider
+  parameter: {name: z, min: -1.0, max: 1.0, default: 0.0}
+- type: slider
+  parameter: {name: height_delta, min: -0.5, max: 0.5, default: 0.0}
+observation:
+  obs_dict:
+    actor_obs:
+    - actions
+    - base_ang_vel
+    - base_right_foot_height_difference
+    - dof_pos
+    - dof_vel
+    - pelvis_orientation_error
+    - pelvis_sine_command
+    - projected_gravity
+  obs_dims:
+    actions: 29
+    base_ang_vel: 3
+    base_right_foot_height_difference: 1
+    dof_pos: 29
+    dof_vel: 29
+    pelvis_orientation_error: 3
+    pelvis_sine_command: 8
+    projected_gravity: 3
+  obs_scales:
+    actions: 1.0
+    base_ang_vel: 0.25
+    base_right_foot_height_difference: 1.0
+    dof_pos: 1.0
+    dof_vel: 0.05
+    pelvis_orientation_error: 1.0
+    pelvis_sine_command: 1.0
+    projected_gravity: 1.0
+  history_length_dict:
+    actor_obs: 1
+task:
+  model_path: models/loco/g1_29dof/ppo_doggy1.onnx
+  action_mask_path: null
+  rl_rate: 50.0
+  policy_action_scale: 0.25
+  action_scales_by_effort_limit_over_p_gain: false
+  use_phase: true
+  gait_period: 1.0
+  skip_stiff_prompt: true
+  auto_walk_on_vel_cmd: false
+  use_sim_time: false
+  desired_base_height: 0.75
+  residual_upper_body_action: false
+  print_observations: false
+  motion_data_path: reference/standup2kneeling/standup2kneeling.npz
+  motion_start_timestep: 0
+  motion_end_timestep: null
+  motion_loop: false
+  debug:
+    force_upright_imu: false
+    force_zero_angular_velocity: false
+    force_zero_action: false
+guard:
+  startup_joint_tolerance_rad: 1
+  startup_gravity_tolerance: 1

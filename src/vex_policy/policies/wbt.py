@@ -13,6 +13,7 @@ from vex_policy.config.config_types.inference import InferenceConfig
 from vex_policy.policies import BasePolicy
 from vex_policy.policies.guard.wbt import WbtGuard
 from vex_policy.policies.wbt_utils import MotionClockUtil, NpzTargetSource, PinocchioRobot, TimestepUtil
+from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.clock import ClockSub
 from vex_policy.utils.math.quat import (
     matrix_from_quat,
@@ -110,21 +111,20 @@ class WholeBodyTrackingPolicy(BasePolicy):
         else:
             _show_warning()
 
-    def _get_ref_body_orientation_in_world(self, robot_state_data):
+    def _get_ref_body_orientation_in_world(self, robot_state_data: LowState):
         # Create configuration for pinocchio robot
         # Note:
         # 1. pinocchio quaternion is in xyzw format, robot_state_data is in wxyz format
         # 2. joint sequences in pinocchio robot and real robot are different
 
         # free base pos, does not matter
-        root_pos = robot_state_data[0, :3]
+        root_pos = robot_state_data.base_pos[0]
 
         # free base ori, wxyz -> xyzw
-        root_ori_xyzw = wxyz_to_xyzw(robot_state_data[:, 3:7])[0]
+        root_ori_xyzw = wxyz_to_xyzw(robot_state_data.base_quat)[0]
 
         # dof pos in real robot -> pinocchio robot
-        num_dofs = self.num_dofs
-        dof_pos_in_real = robot_state_data[0, 7: 7 + num_dofs]
+        dof_pos_in_real = robot_state_data.joint_pos[0]
         dof_pos_in_pinocchio = dof_pos_in_real[self.pinocchio_robot.real2pinocchio_index]
 
         configuration = np.concatenate([root_pos, root_ori_xyzw, dof_pos_in_pinocchio], axis=0)
@@ -224,9 +224,9 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.motion_yaw_offset = 0.0
         self._configure_action_scales()
 
-    def get_init_target(self, robot_state_data):
+    def get_init_target(self, robot_state_data: LowState):
         """Get initialization target joint positions."""
-        dof_pos = robot_state_data[:, 7: 7 + self.num_dofs]
+        dof_pos = robot_state_data.joint_pos
         if self.get_ready_state:
             # Interpolate from current dof_pos to first pose in motion command
             target_dof_pos = self.motion_command_0[:, : self.num_dofs]
@@ -236,7 +236,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
             return q_target
         return dof_pos
 
-    def get_current_obs_buffer_dict(self, robot_state_data):
+    def get_current_obs_buffer_dict(self, robot_state_data: LowState):
         current_obs_buffer_dict = {}
 
         # motion_command
@@ -254,15 +254,13 @@ class WholeBodyTrackingPolicy(BasePolicy):
         current_obs_buffer_dict["motion_ref_ori_b"] = motion_ref_ori_b[..., :2].reshape(1, -1)
 
         # base_ang_vel
-        current_obs_buffer_dict["base_ang_vel"] = robot_state_data[:, 7 + self.num_dofs + 3: 7 + self.num_dofs + 6]
+        current_obs_buffer_dict["base_ang_vel"] = robot_state_data.base_ang_vel
 
         # dof_pos
-        current_obs_buffer_dict["dof_pos"] = robot_state_data[:, 7: 7 + self.num_dofs] - self.default_dof_angles
+        current_obs_buffer_dict["dof_pos"] = robot_state_data.joint_pos - self.default_dof_angles
 
         # dof_vel
-        current_obs_buffer_dict["dof_vel"] = robot_state_data[
-            :, 7 + self.num_dofs + 6: 7 + self.num_dofs + 6 + self.num_dofs
-        ]
+        current_obs_buffer_dict["dof_vel"] = robot_state_data.joint_vel
 
         # actions
         current_obs_buffer_dict["actions"] = self.last_policy_action
@@ -447,7 +445,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
     def _capture_robot_yaw_offset(self):
         """Capture robot yaw when policy starts to use as reference offset."""
-        robot_state_data = self.interface.get_low_state()
+        robot_state_data = self._read_low_state()
         if robot_state_data is None:
             self.robot_yaw_offset = 0.0
             self.logger.warning("Unable to capture robot yaw offset - missing robot state.")
