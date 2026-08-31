@@ -1,3 +1,3 @@
-from .base_interface import BaseInterface, LowState
+from .base_interface import BaseInterface, LowCommand, LowState
 
-__all__ = ["BaseInterface", "LowState"]
+__all__ = ["BaseInterface", "LowCommand", "LowState"]

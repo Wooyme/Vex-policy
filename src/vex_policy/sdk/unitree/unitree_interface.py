@@ -3,7 +3,7 @@
 import numpy as np
 
 from vex_policy.config.config_types import RobotConfig
-from vex_policy.sdk.base.base_interface import BaseInterface, LowState
+from vex_policy.sdk.base.base_interface import BaseInterface, LowCommand, LowState
 
 
 class UnitreeInterface(BaseInterface):
@@ -42,7 +42,7 @@ class UnitreeInterface(BaseInterface):
         if self.robot_config.robot.lower() == "go2":
             self._unitree_motor_order = (3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8)
 
-    def get_low_state(self) -> LowState | None:
+    def _get_low_state(self) -> LowState | None:
         """Get the latest raw robot state in hardware joint order."""
         state = self.unitree_interface.read_low_state()
         if state is None:
@@ -50,39 +50,54 @@ class UnitreeInterface(BaseInterface):
 
         base_pos = np.zeros((1, 3))
         quat = np.asarray(state.imu.quat).reshape(1, 4)
-        motor_pos = np.array(state.motor.q)
         base_lin_vel = np.zeros((1, 3))
         base_ang_vel = np.asarray(state.imu.omega).reshape(1, 3)
-        motor_vel = np.array(state.motor.dq)
 
-        joint_pos = np.zeros((1, self.robot_config.num_joints))
-        joint_vel = np.zeros((1, self.robot_config.num_joints))
+        empty_joint_values = np.zeros((1, self.robot_config.num_joints))
         motor_order = self._unitree_motor_order or self.robot_config.joint2motor
 
-        for j_id in range(self.robot_config.num_joints):
-            m_id = motor_order[j_id]
-            joint_pos[0, j_id] = float(motor_pos[m_id])
-            joint_vel[0, j_id] = float(motor_vel[m_id])
+        def read_motor_values(name: str) -> np.ndarray:
+            motor_values = getattr(state.motor, name, None)
+            if motor_values is None:
+                return np.zeros_like(empty_joint_values)
+
+            motor_values = np.asarray(motor_values).reshape(-1)
+            if len(motor_values) <= max(motor_order):
+                return np.zeros_like(empty_joint_values)
+
+            joint_values = np.zeros_like(empty_joint_values)
+            for j_id in range(self.robot_config.num_joints):
+                joint_values[0, j_id] = float(motor_values[motor_order[j_id]])
+            return joint_values
+
+        q = read_motor_values("q")
+        dq = read_motor_values("dq")
+        ddq = read_motor_values("ddq")
+        tau_est = read_motor_values("tau_est")
 
         return LowState(
             base_pos=base_pos,
             base_quat=quat,
-            joint_pos=joint_pos,
+            joint_pos=q,
             base_lin_vel=base_lin_vel,
             base_ang_vel=base_ang_vel,
-            joint_vel=joint_vel,
+            joint_vel=dq,
+            q=q,
+            dq=dq,
+            ddq=ddq,
+            tau_est=tau_est,
         )
 
-    def send_low_command(
+    def _prepare_low_command(
         self,
         cmd_q: np.ndarray,
         cmd_dq: np.ndarray,
         cmd_tau: np.ndarray,
-        dof_pos_latest: np.ndarray = None,
-        kp_override: np.ndarray = None,
-        kd_override: np.ndarray = None,
-    ):
-        """Send low-level command to robot."""
+        dof_pos_latest: np.ndarray | None,
+        kp_override: np.ndarray | None,
+        kd_override: np.ndarray | None,
+    ) -> LowCommand:
+        """Build the final Unitree SDK command in motor order."""
         cmd_q_target = np.zeros(self.robot_config.num_motors)
         cmd_dq_target = np.zeros(self.robot_config.num_motors)
         cmd_tau_target = np.zeros(self.robot_config.num_motors)
@@ -107,11 +122,23 @@ class UnitreeInterface(BaseInterface):
 
         motor_kp = np.array(cmd_kp if cmd_kp is not None else self.robot_config.motor_kp)
         motor_kd = np.array(cmd_kd if cmd_kd is not None else self.robot_config.motor_kd)
-        cmd.kp = list(motor_kp * self._kp_level)
-        cmd.kd = list(motor_kd * self._kd_level)
+        final_kp = motor_kp * self._kp_level
+        final_kd = motor_kd * self._kd_level
+        cmd.kp = list(final_kp)
+        cmd.kd = list(final_kd)
 
-        self.unitree_interface.write_low_command(cmd)
+        return LowCommand(
+            payload=cmd,
+            q_target=cmd_q_target,
+            dq_target=cmd_dq_target,
+            tau_ff=cmd_tau_target,
+            kp=final_kp,
+            kd=final_kd,
+        )
 
+    def _write_low_command(self, command: LowCommand) -> None:
+        """Write one prepared Unitree command."""
+        self.unitree_interface.write_low_command(command.payload)
 
     @property
     def kp_level(self):

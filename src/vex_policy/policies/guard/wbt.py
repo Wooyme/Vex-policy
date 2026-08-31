@@ -22,12 +22,7 @@ LOWER_BODY_DOF_NAMES_NO_WAIST = (
 
 
 class WbtGuard(BaseGuard):
-    def start_check(self) -> tuple[bool, str | None]:
-        robot_state_data = self.policy._read_low_state()
-        if robot_state_data is None:
-            reason = "start check failed, low_state_unavailable"
-            self.policy.logger.warning(reason)
-            return False, reason
+    def start_check(self, robot_state_data: LowState) -> tuple[bool, str | None]:
         motion_command_t = self.policy.motion_command_0
         ref_quat_xyzw_t = self.policy.ref_quat_xyzw_0
         if self.bad_ref_ori(xyzw_to_wxyz(ref_quat_xyzw_t), robot_state_data):

@@ -22,16 +22,11 @@ class HoldPositionPolicy(BasePolicy):
         self.config = config
         self.logger = logger
         self._init_robot_config(config.robot)
-        self._init_sdk_components()
-        self._init_communication_components()
         self.rl_rate = config.task.rl_rate
         self.use_phase = False
         self._init_latency_tracking()
         self.guard = None
         self.held_dof_pos: np.ndarray | None = None
-        self.cmd_q = np.zeros(self.num_dofs, dtype=np.float64)
-        self.cmd_dq = np.zeros(self.num_dofs, dtype=np.float64)
-        self.cmd_tau = np.zeros(self.num_dofs, dtype=np.float64)
         kp = self.robot_config.motor_kp or self.robot_config.stiff_startup_kp
         kd = self.robot_config.motor_kd or self.robot_config.stiff_startup_kd
         if kp is None or kd is None:
@@ -41,35 +36,19 @@ class HoldPositionPolicy(BasePolicy):
         self.hold_kp = np.asarray(kp, dtype=np.float64)
         self.hold_kd = np.asarray(kd, dtype=np.float64)
 
-    def activate(self) -> str | None:
+    def activate(self, robot_state: LowState) -> str | None:
         """Capture the current DOF positions and begin holding them."""
         self.held_dof_pos = None
-        robot_state = self._read_low_state()
-        if robot_state is None:
-            return "hold_position_start_failed: low_state_unavailable"
         dof_pos = np.asarray(robot_state.joint_pos[0], dtype=np.float64)
         if not np.isfinite(dof_pos).all():
             return "hold_position_start_failed: invalid_dof_pos"
         self.held_dof_pos = dof_pos.copy()
         self.logger.info("Holding activation-time DOF positions")
-        if not getattr(self, "_manager_owns_interface_lifecycle", False):
-            self._configure_interface_writer()
-            start_writer = getattr(self.interface, "start_command_writer", None)
-            if start_writer is not None:
-                start_writer()
-            if hasattr(self.interface, "no_action"):
-                self.interface.no_action = 0
         return None
 
     def deactivate(self) -> None:
         """Discard the snapshot so the next activation captures a fresh pose."""
         self.held_dof_pos = None
-        if not getattr(self, "_manager_owns_interface_lifecycle", False):
-            stop_writer = getattr(self.interface, "stop_command_writer", None)
-            if stop_writer is not None:
-                stop_writer()
-            if hasattr(self.interface, "no_action"):
-                self.interface.no_action = 1
 
     def apply_control(self, control: Mapping[str, float]) -> None:
         """The hold policy has no runtime control parameters."""

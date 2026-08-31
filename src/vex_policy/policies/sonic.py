@@ -242,10 +242,10 @@ class SonicPolicy(BasePolicy):
         self.last_policy_action = np.zeros((1, self.num_dofs), dtype=np.float32)
         self.scaled_policy_action = np.zeros((1, self.num_dofs), dtype=np.float32)
 
-    def activate(self) -> str | None:
+    def activate(self, robot_state_data: LowState) -> str | None:
         self._stop_planner()
         self._reset_sonic_state()
-        reason = super().activate()
+        reason = super().activate(robot_state_data)
         if reason:
             return reason
         if self.sonic_task.motion_source == "directory":

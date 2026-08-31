@@ -101,6 +101,4 @@ task:
   motion_name: null
   # false holds the final frame; true restarts from frame 0.
   motion_loop: false
-  lowcmd_publish_rate: 500.0
-  low_state_timeout_s: 0.1
   planner_encoder_mode: 0

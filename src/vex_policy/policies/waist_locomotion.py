@@ -315,10 +315,7 @@ class WaistLocomotionPolicy(BasePolicy):
             initial_height + self.waist_input_parameters["height_delta"].default,
         )
 
-    def _handle_start_policy(self) -> None:
-        robot_state_data = self._read_low_state()
-        if robot_state_data is None:
-            raise RuntimeError("Cannot capture pelvis orientation: low-level robot state is unavailable")
+    def _handle_start_policy(self, robot_state_data: LowState) -> None:
         reference_quat = np.asarray(robot_state_data.base_quat, dtype=np.float64).copy()
         reference_norm = np.linalg.norm(reference_quat, axis=1, keepdims=True)
         if not np.isfinite(reference_quat).all() or np.any(reference_norm < 1e-8):
@@ -331,7 +328,7 @@ class WaistLocomotionPolicy(BasePolicy):
         self.initial_base_right_foot_height_difference = float(initial_height[0, 0])
         self._reset_inference_episode_state()
         self._reset_pelvis_sine_command()
-        super()._handle_start_policy()
+        super()._handle_start_policy(robot_state_data)
 
     def update_phase_time(self) -> None:
         frequency_hz = float(self.pelvis_sine_command[0, 3])

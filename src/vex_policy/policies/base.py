@@ -16,7 +16,6 @@ from termcolor import colored
 from vex_policy.config.config_types.inference import InferenceConfig
 from vex_policy.config.config_types.robot import RobotConfig
 from vex_policy.inputs.api.commands import VelCmd
-from vex_policy.sdk import create_interface
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.latency import LatencyTracker
 from vex_policy.utils.math.quat import quat_rotate_inverse
@@ -45,12 +44,8 @@ class BasePolicy:
         self.logger = logger
         # Initialize robot config
         self._init_robot_config(self.config.robot)
-        # Initialize SDK components
-        self._init_sdk_components()
         # Initialize observation config
         self._init_obs_config()
-        # Initialize communication components
-        self._init_communication_components()
         # Initialize policy components
         self._init_policy_components(
             self.config.task.model_path, self.config.task.policy_action_scale, self.config.task.rl_rate
@@ -125,13 +120,6 @@ class BasePolicy:
             action.fill(0.0)
         return action
 
-    def _init_sdk_components(self):
-        """Record the SDK backend; concrete construction remains registry based."""
-        if hasattr(self, "_shared_hardware_source"):
-            self.sdk_type = self._shared_hardware_source.sdk_type
-            return
-        self.sdk_type = self.robot_config.sdk_type
-
     def _init_obs_config(self):
         """Initialize observation metadata and history buffers."""
         self.obs_config = self.config.observation
@@ -162,35 +150,6 @@ class BasePolicy:
                 flattened_terms.append(np.zeros((1, term_dim * history_len), dtype=np.float32))
 
             self.obs_buf_dict[group] = np.concatenate(flattened_terms, axis=1) if flattened_terms else np.zeros((1, 0))
-
-    def _init_communication_components(self):
-        """Initialize or reuse the shared robot interface."""
-        if hasattr(self, "_shared_hardware_source"):
-            self.interface = self._shared_hardware_source.interface
-            self._configure_interface_writer()
-            return
-        if hasattr(self, "_injected_interface"):
-            self.interface = self._injected_interface
-            self._configure_interface_writer()
-            return
-        self.interface = create_interface(
-            self.robot_config,
-            getattr(self, "_runtime_domain_id", 0),
-            getattr(self, "_runtime_interface", "auto"),
-            False,
-        )
-        self._configure_interface_writer()
-
-    def _configure_interface_writer(self) -> None:
-        configure = getattr(self.interface, "configure_writer", None)
-        if configure is not None:
-            configure(
-                getattr(self.config.task, "lowcmd_publish_rate", 500.0),
-                getattr(self.config.task, "low_state_timeout_s", 0.1),
-            )
-
-    def _read_low_state(self) -> LowState | None:
-        return self.interface.get_low_state()
 
     def _init_policy_components(self, model_path, policy_action_scale, rl_rate):
         """Initialize policy-related components."""
@@ -294,11 +253,6 @@ class BasePolicy:
         # Upper body controller
         self.upper_body_controller = None
 
-        # Pre-allocate command arrays for postprocessing
-        self.cmd_q = np.zeros(self.num_dofs)
-        self.cmd_dq = np.zeros(self.num_dofs)
-        self.cmd_tau = np.zeros(self.num_dofs)
-
     def _init_phase_components(self):
         """Initialize phase components."""
         self.use_phase = self.config.task.use_phase
@@ -386,11 +340,6 @@ class BasePolicy:
             raise ValueError(
                 f"KD array length ({len(kd_values)}) does not match num_motors ({self.robot_config.num_motors})"
             )
-
-        # Policies share one hardware interface. Always select this policy's
-        # resolved gains, including when they came from explicit config, so a
-        # mode switch cannot retain the previously active policy's KP/KD.
-        self.interface.update_config(self.robot_config)
 
     def _calculate_obs_dim_dict(self):
         """Calculate observation dimensions for each observation type."""
@@ -623,47 +572,6 @@ class BasePolicy:
             controlled_joints=self.controlled_joint_mask.copy(),
         )
 
-    def send_joint_command(self, command: PolicyJointCommand, robot_state_data: LowState) -> None:
-        """Publish a computed command, applying calibration offsets exactly once."""
-        self.cmd_q[:] = command.q + self.joint_offsets
-        self.cmd_dq[:] = command.dq
-        self.cmd_tau[:] = command.tau
-
-        with self.latency_tracker.measure("action_pub"):
-            self.interface.send_low_command(
-                self.cmd_q,
-                self.cmd_dq,
-                self.cmd_tau,
-                robot_state_data.joint_pos[0],
-                kp_override=command.kp,
-                kd_override=command.kd,
-            )
-
-        # Telemetry hook: fires every control tick in every state (policy,
-        # stiff-hold, init ramp) with the final executed command. Default
-        # no-op; override to publish feedback (e.g. ROS topics) without
-        # touching the control loop.
-        self._on_command_sent(self.cmd_q, robot_state_data)
-
-    def policy_action(self):
-        """Execute policy action and send commands to robot."""
-        with self.latency_tracker.measure("read_state"):
-            robot_state_data = self._read_low_state()
-        if robot_state_data is None:
-            stop_writer = getattr(self.interface, "stop_command_writer", None)
-            if stop_writer is not None:
-                stop_writer()
-            raise RuntimeError("Low-level robot state is unavailable or stale; command publishing has stopped")
-        command = self.compute_joint_command(robot_state_data)
-        self.send_joint_command(command, robot_state_data)
-
-    def _on_command_sent(self, cmd_q, robot_state_data: LowState) -> None:
-        """Hook called after each executed command is sent. Override to observe.
-
-        cmd_q: (num_dofs,) full-body joint command actually sent this tick.
-        robot_state_data: latest structured robot state used this tick.
-        """
-
     def _get_manual_command(self, robot_state_data):
         """Optional manual command when policy control is disabled."""
         return
@@ -695,44 +603,36 @@ class BasePolicy:
     # Control Action Methods
     # ============================================================================
 
-    def _handle_start_policy(self):
+    def _handle_start_policy(self, robot_state_data: LowState):
         """Handle start policy action."""
+        del robot_state_data
         self.use_policy_action = True
         self.get_ready_state = False
         self.logger.info(colored("Using policy actions", "blue"))
         self.phase = np.array([[0.0, np.pi]])
-        if not getattr(self, "_manager_owns_interface_lifecycle", False) and hasattr(self.interface, "no_action"):
-            self.interface.no_action = 0
 
-    def activate(self) -> str | None:
+    def activate(self, robot_state_data: LowState) -> str | None:
         """Reset policy-local phase/history and begin inference."""
         if self.guard:
-            result, reason = self.guard.start_check()
+            result, reason = self.guard.start_check(robot_state_data)
             if not result:
                 return reason
         self._init_phase_components()
-        self._handle_start_policy()
-        if not getattr(self, "_manager_owns_interface_lifecycle", False):
-            self._configure_interface_writer()
-            start_writer = getattr(self.interface, "start_command_writer", None)
-            if start_writer is not None:
-                start_writer()
+        self._handle_start_policy(robot_state_data)
 
     def deactivate(self) -> None:
         """Stop inference state without sending another low-level command."""
         self._handle_stop_policy()
-        if not getattr(self, "_manager_owns_interface_lifecycle", False):
-            stop_writer = getattr(self.interface, "stop_command_writer", None)
-            if stop_writer is not None:
-                stop_writer()
 
-    def step(self) -> None:
-        """Execute one active control cycle."""
+    def step(self, robot_state_data: LowState) -> PolicyJointCommand:
+        """Compute one policy-local command from a shared state snapshot."""
         self.latency_tracker.start_cycle()
-        if self.use_phase:
-            self.update_phase_time()
-        self.policy_action()
-        self.latency_tracker.end_cycle()
+        try:
+            if self.use_phase:
+                self.update_phase_time()
+            return self.compute_joint_command(robot_state_data)
+        finally:
+            self.latency_tracker.end_cycle()
 
     def get_reference_state(self) -> np.ndarray | None:
         """Return an optional reference pose using the robot-state prefix layout."""
@@ -746,16 +646,12 @@ class BasePolicy:
         self.use_policy_action = False
         self.get_ready_state = False
         self.logger.info("Actions set to zero")
-        if not getattr(self, "_manager_owns_interface_lifecycle", False) and hasattr(self.interface, "no_action"):
-            self.interface.no_action = 1
 
     def _handle_init_state(self):
         """Handle initialization state."""
         self.get_ready_state = True
         self.init_count = 0
         self.logger.info("Setting to init state")
-        if not getattr(self, "_manager_owns_interface_lifecycle", False) and hasattr(self.interface, "no_action"):
-            self.interface.no_action = 0
 
     def _print_control_status(self):
         """Print current control status."""
@@ -763,7 +659,5 @@ class BasePolicy:
         if self.active_model_path:
             total = len(self.model_paths)
             name = Path(self.active_model_path).name
-            debug_str = (
-                f"Active policy [{self.active_policy_index + 1}/{total}]: {name} Kp level {self.interface.kp_level:.2f}"
-            )
+            debug_str = f"Active policy [{self.active_policy_index + 1}/{total}]: {name}"
             self.logger.info(debug_str)

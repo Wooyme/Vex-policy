@@ -1,8 +1,9 @@
-"""Runtime switching among MQTT-selected policy instances."""
+"""MQTT-driven policy control state machine."""
 
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
@@ -18,6 +19,7 @@ from vex_policy.policies.locomotion import LocomotionPolicy
 from vex_policy.policies.sonic import SonicPolicy
 from vex_policy.policies.waist_locomotion import WaistLocomotionPolicy
 from vex_policy.policies.wbt import WholeBodyTrackingPolicy
+from vex_policy.sdk import InterfaceManager
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.rate import RateLimiter
 
@@ -39,8 +41,8 @@ def _policy_class(kind: str) -> type[BasePolicy]:
     raise ValueError(f"Unknown policy kind: {kind}")
 
 
-class SwitchModePolicy:
-    """Own one interface and run either one full-body or an upper/lower pair."""
+class PolicyStateMachine:
+    """Run one full-body policy or an upper/lower pair through one interface."""
 
     def __init__(
         self,
@@ -50,7 +52,7 @@ class SwitchModePolicy:
         instances: dict[str, BasePolicy] | None = None,
         inbox: CommandInbox | None = None,
         transport: MqttTransport | None = None,
-        interface: Any | None = None,
+        interface_manager: InterfaceManager | None = None,
         clock=time.monotonic,
     ):
         self.runtime = runtime
@@ -60,15 +62,16 @@ class SwitchModePolicy:
         self._specs = {item.spec.name: item.spec for item in resolved}
         self.inbox = inbox or CommandInbox(self._specs, clock=clock)
         self.transport = transport or MqttTransport(runtime.mqtt, tuple(item.spec for item in resolved), self.inbox)
-        self._injected_interface = interface
+        self.interface_manager = interface_manager or InterfaceManager.get()
         self.policies = instances or self._build_policies()
         if set(self.policies) != set(self._specs):
             raise ValueError("Policy instances must exactly match configured policy names")
         owner = next(iter(self.policies.values()))
-        self.interface = owner.interface
         self.dof_names = tuple(owner.dof_names)
-        for policy in self.policies.values():
-            policy._manager_owns_interface_lifecycle = True
+        self._policy_executor = ThreadPoolExecutor(
+            max_workers=2,
+            thread_name_prefix="vex-policy",
+        )
 
         rate = resolved[0].config.task.rl_rate
         self.rate = RateLimiter(rate)
@@ -81,24 +84,11 @@ class SwitchModePolicy:
         self.last_command_seq: int | None = None
         self._last_status: tuple[Any, ...] | None = None
 
-    def _read_low_state(self) -> LowState | None:
-        return self.interface.get_low_state()
-
     def _build_policies(self) -> dict[str, BasePolicy]:
         instances: dict[str, BasePolicy] = {}
-        owner: BasePolicy | None = None
         for item in self.resolved:
             cls = _policy_class(item.kind)
-            policy = object.__new__(cls)
-            if owner is None:
-                policy._runtime_domain_id = self.runtime.robot.domain_id
-                policy._runtime_interface = self.runtime.robot.interface
-                if self._injected_interface is not None:
-                    policy._injected_interface = self._injected_interface
-            else:
-                policy._shared_hardware_source = owner
-            cls.__init__(policy, item.config)
-            owner = owner or policy
+            policy = cls(item.config)
             instances[item.spec.name] = policy
             logger.info(f"Preloaded policy {item.spec.name}: {cls.__name__}")
         return instances
@@ -125,11 +115,6 @@ class SwitchModePolicy:
         for name in self.active_policy:
             self.policies[name].deactivate()
         self.active_policy = ()
-        stop_writer = getattr(self.interface, "stop_command_writer", None)
-        if stop_writer is not None:
-            stop_writer()
-        if hasattr(self.interface, "no_action"):
-            self.interface.no_action = 1
 
     def _latch(self, reason: str) -> None:
         self._deactivate()
@@ -143,16 +128,7 @@ class SwitchModePolicy:
     def _canonical_selection(self, names) -> tuple[str, ...]:
         return tuple(sorted(names, key=self._selection_key))
 
-    def _configure_writer(self, names: tuple[str, ...]) -> None:
-        configure = getattr(self.interface, "configure_writer", None)
-        if configure is None:
-            return
-        tasks = [self.policies[name].config.task for name in names]
-        publish_rate = max(getattr(task, "lowcmd_publish_rate", 500.0) for task in tasks)
-        timeout = min(getattr(task, "low_state_timeout_s", 0.1) for task in tasks)
-        configure(publish_rate, timeout)
-
-    def _activate(self, names: tuple[str, ...]) -> None:
+    def _activate(self, names: tuple[str, ...], robot_state: LowState) -> None:
         names = self._canonical_selection(names)
         self.state = "switching"
         self.reason = None
@@ -168,18 +144,13 @@ class SwitchModePolicy:
         for name in names:
             if name in previous:
                 continue
-            reason = self.policies[name].activate()
+            reason = self.policies[name].activate(robot_state)
             if reason:
                 for activated_name in activated:
                     self.policies[activated_name].deactivate()
                 for retained_name in previous & desired:
                     self.policies[retained_name].deactivate()
                 self.active_policy = ()
-                stop_writer = getattr(self.interface, "stop_command_writer", None)
-                if stop_writer is not None:
-                    stop_writer()
-                if hasattr(self.interface, "no_action"):
-                    self.interface.no_action = 1
                 self.state = "latched"
                 self.reason = reason
                 self._publish_status()
@@ -187,18 +158,7 @@ class SwitchModePolicy:
             activated.append(name)
 
         self.active_policy = names
-        self._configure_writer(names)
-        if not previous:
-            start_writer = getattr(self.interface, "start_command_writer", None)
-            if start_writer is not None:
-                start_writer()
-        if hasattr(self.interface, "no_action"):
-            self.interface.no_action = 0
         self.state = "running"
-
-    def _on_command_sent(self, cmd_q, robot_state) -> None:
-        del cmd_q
-        self._maybe_publish_state(robot_state)
 
     def _maybe_publish_state(self, robot_state, now: float | None = None) -> None:
         current = self._clock() if now is None else now
@@ -228,19 +188,17 @@ class SwitchModePolicy:
                 self.transport.publish_reference_state(reference_payload)
         self._next_state_publish = current + self._state_period
 
-    def _publish_idle_state(self, now: float) -> None:
-        if now + 1e-9 < self._next_state_publish:
-            return
-        robot_state = self._read_low_state()
+    def _publish_idle_state(self, robot_state: LowState | None, now: float) -> None:
         if robot_state is not None:
             self._maybe_publish_state(robot_state, now)
 
     def tick(self, now: float | None = None) -> None:
         """Run one deterministic state-machine/control iteration."""
         current = self._clock() if now is None else now
+        robot_state = self.interface_manager.get_low_state()
         received = self.inbox.snapshot()
         if received is None:
-            self._publish_idle_state(current)
+            self._publish_idle_state(robot_state, current)
             self._publish_status()
             return
 
@@ -251,12 +209,12 @@ class SwitchModePolicy:
 
         if current - received.received_at > self.runtime.mqtt.command_timeout_s:
             self._latch("command_timeout")
-            self._publish_idle_state(current)
+            self._publish_idle_state(robot_state, current)
             self._publish_status()
             return
         if control.estop:
             self._latch("estop")
-            self._publish_idle_state(current)
+            self._publish_idle_state(robot_state, current)
             self._publish_status()
             return
 
@@ -264,7 +222,7 @@ class SwitchModePolicy:
             if not control.policy:
                 self.state = "idle"
                 self.reason = None
-            self._publish_idle_state(current)
+            self._publish_idle_state(robot_state, current)
             self._publish_status()
             return
 
@@ -272,24 +230,29 @@ class SwitchModePolicy:
             self._deactivate()
             self.state = "idle"
             self.reason = None
-            self._publish_idle_state(current)
+            self._publish_idle_state(robot_state, current)
             self._publish_status()
             return
 
         desired = self._canonical_selection(control.policy)
         if desired != self.active_policy:
-            self._activate(desired)
-            self._publish_idle_state(current)
+            if robot_state is None:
+                self._latch("low_state_unavailable")
+            else:
+                self._activate(desired, robot_state)
+            self._publish_idle_state(robot_state, current)
             self._publish_status()
             return  # deliberate one-cycle low-command gap during a switch
 
         for name in desired:
             policy = self.policies[name]
             policy.apply_control(control.inputs[name])
-        if not self._step_active_policies():
-            self._publish_idle_state(current)
+        if robot_state is None:
+            self._latch("low_state_unavailable")
+            self._publish_idle_state(robot_state, current)
             self._publish_status()
             return
+        self._step_active_policies(robot_state)
         self.state = "running"
         self.reason = None
         self._publish_status()
@@ -305,28 +268,21 @@ class SwitchModePolicy:
             logger.info("Policy runtime interrupted")
         finally:
             self._deactivate()
+            self._policy_executor.shutdown(wait=True)
             for policy in self.policies.values():
                 policy.close()
-            close_interface = getattr(self.interface, "close", None)
-            if close_interface is not None:
-                close_interface()
             self.transport.close()
 
-    def _step_active_policies(self) -> bool:
+    def _step_active_policies(self, robot_state: LowState) -> None:
         """Infer all active policies from one state snapshot and publish one merged command."""
-        robot_state = self._read_low_state()
-        if robot_state is None:
-            self._latch("low_state_unavailable")
-            return False
-
-        commands = []
-        for name in self.active_policy:
-            policy = self.policies[name]
-            policy.latency_tracker.start_cycle()
-            if policy.use_phase:
-                policy.update_phase_time()
-            commands.append(policy.compute_joint_command(robot_state))
-            policy.latency_tracker.end_cycle()
+        if len(self.active_policy) == 1:
+            commands = [self.policies[self.active_policy[0]].step(robot_state)]
+        else:
+            futures = {
+                name: self._policy_executor.submit(self.policies[name].step, robot_state)
+                for name in self.active_policy
+            }
+            commands = [futures[name].result() for name in self.active_policy]
 
         owner = self.policies[self.active_policy[0]]
         num_dofs = owner.num_dofs
@@ -345,7 +301,7 @@ class SwitchModePolicy:
             kd[selected] = command.kd[selected]
 
         q += owner.joint_offsets
-        self.interface.send_low_command(
+        self.interface_manager.send_low_command(
             q,
             dq,
             tau,
@@ -354,7 +310,6 @@ class SwitchModePolicy:
             kd_override=kd,
         )
         self._maybe_publish_state(robot_state)
-        return True
 
 
-__all__ = ["SwitchModePolicy"]
+__all__ = ["PolicyStateMachine"]

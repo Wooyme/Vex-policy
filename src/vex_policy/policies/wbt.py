@@ -10,7 +10,7 @@ from loguru import logger
 from termcolor import colored
 
 from vex_policy.config.config_types.inference import InferenceConfig
-from vex_policy.policies import BasePolicy
+from vex_policy.policies.base import BasePolicy
 from vex_policy.policies.guard.wbt import WbtGuard
 from vex_policy.policies.wbt_utils import MotionClockUtil, NpzTargetSource, PinocchioRobot, TimestepUtil
 from vex_policy.sdk.base.base_interface import LowState
@@ -379,10 +379,10 @@ class WholeBodyTrackingPolicy(BasePolicy):
         quat_wxyz = xyzw_to_wxyz(quat_xyzw)
         return np.concatenate((np.zeros((1, 3)), quat_wxyz, joint_pos), axis=1)
 
-    def _handle_start_policy(self):
-        super()._handle_start_policy()
+    def _handle_start_policy(self, robot_state_data: LowState):
+        super()._handle_start_policy(robot_state_data)
         self._stiff_hold_active = False
-        self._capture_robot_yaw_offset()
+        self._capture_robot_yaw_offset(robot_state_data)
         self._capture_motion_yaw_offset(self.ref_quat_xyzw_0)
         self._handle_start_motion_clip()
 
@@ -414,8 +414,6 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.get_ready_state = False
         self._stiff_hold_active = True
         self.logger.info("Actions set to stiff startup command")
-        if not getattr(self, "_manager_owns_interface_lifecycle", False) and hasattr(self.interface, "no_action"):
-            self.interface.no_action = 0
 
         self.motion_clip_progressing = False
         self.timestep_util.reset(start_timestep=0)
@@ -443,14 +441,8 @@ class WholeBodyTrackingPolicy(BasePolicy):
         else:
             self.logger.info(colored("Starting motion clip", "blue"))
 
-    def _capture_robot_yaw_offset(self):
+    def _capture_robot_yaw_offset(self, robot_state_data: LowState):
         """Capture robot yaw when policy starts to use as reference offset."""
-        robot_state_data = self._read_low_state()
-        if robot_state_data is None:
-            self.robot_yaw_offset = 0.0
-            self.logger.warning("Unable to capture robot yaw offset - missing robot state.")
-            return
-
         robot_ref_ori = self._get_ref_body_orientation_in_world(robot_state_data)  # wxyz
         yaw = self._quat_yaw(robot_ref_ori)
         self.robot_yaw_offset = yaw

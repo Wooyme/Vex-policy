@@ -32,8 +32,14 @@ uv run vex-policy \
   --mqtt-config configs/mqtt.yaml \
   --mqtt-broker mqtt://localhost:1883 \
   --interface eth0 \
-  --domain-id 0
+  --domain-id 0 \
+  --sdk-log-dir logs/sdk
 ```
+
+`--sdk-log-dir` 未指定时关闭 SDK 高频日志。启用后，每次运行会在目标目录创建独立会话目录，后台线程将
+`get_low_state` 的返回值（包括空读）和最终传给 `write_low_command` 的 motor-order 命令写成 5 秒一个的
+压缩 `chunk_*.npz`。控制线程只向有界内存队列提交快照；队列满时丢弃最旧记录，日志压缩或磁盘错误不会
+中断机器人控制。正常退出会刷新不足 5 秒的尾部分块，异常退出可能丢失尚未落盘的数据。日志不会自动清理。
 
 ## 默认 policies
 
@@ -75,8 +81,6 @@ uv run vex-policy \
 ```
 
 `motion_data_path` 可以指向一个动作目录，也可以指向包含多个动作子目录的集合；集合中有多个有效动作时需要填写 `motion_name`。每个动作目录包含带表头的 `joint_pos.csv`、`joint_vel.csv`、`body_pos.csv` 和 `body_quat.csv`，采样率为 50Hz，29 个关节列使用 IsaacLab/policy 顺序，根四元数使用 `wxyz`。`motion_loop: false` 会在动作末帧保持，设为 `true` 则循环播放。目录模式只加载 decoder 和 encoder，不校验也不创建 planner session。
-
-planner 模式保持源部署的三种频率：decoder/encoder 控制循环 50Hz、planner 调度 10Hz、LowCmd writer 500Hz；目录模式不启动 10Hz planner 线程。writer 每 2ms 重发最近的线程安全命令快照，并填充 `mode_pr`、LowState 中的 `mode_machine` 和纯 Python CRC；LowState CRC 错误或超过 `low_state_timeout_s` 未更新时不会发布。
 
 配置按变化频率拆分：
 

@@ -17,12 +17,10 @@ class DebugConfig:
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class HoldPositionTaskConfig:
-    """Timing and writer configuration for the model-free hold policy."""
+    """Configuration for the model-free hold policy."""
 
     action_mask_path: str | None = None
     rl_rate: float = Field(default=50.0, gt=0)
-    lowcmd_publish_rate: float = Field(default=500.0, gt=0)
-    low_state_timeout_s: float = Field(default=0.1, gt=0)
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
@@ -67,8 +65,6 @@ class SonicTaskConfig(TaskConfig):
     planner_mode: int = Field(default=0, ge=0, le=26)
     planner_version: Literal[0, 1, 2] = 2
     planner_rate: float = Field(default=10.0, gt=0)
-    lowcmd_publish_rate: float = Field(default=500.0, gt=0)
-    low_state_timeout_s: float = Field(default=0.1, gt=0)
     motion_look_ahead_steps: int = Field(default=2, ge=0)
     planner_seed: int = 1234
     planner_default_height: float = 0.78874

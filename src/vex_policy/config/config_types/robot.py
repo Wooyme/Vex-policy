@@ -8,6 +8,8 @@ from typing import Any
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
+from vex_policy.sdk.high_frequency_logger import HighFrequencyLogConfig
+
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class RobotConfig:
@@ -162,6 +164,9 @@ class RobotConfig:
 
     message_type: typing.Literal["HG", "GO2"] = "HG"
     """Message protocol type."""
+
+    high_frequency_log: HighFrequencyLogConfig | None = None
+    """Optional asynchronous logging of SDK state and command traffic."""
 
     # =========================================================================
     # Dimensions (OPTIONAL - with defaults)

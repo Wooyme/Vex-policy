@@ -33,11 +33,7 @@ class WaistLocomotionGuard(BaseGuard):
             raise ValueError("robot projected gravity is invalid")
         return gravity
 
-    def start_check(self) -> tuple[bool, str | None]:
-        robot_state_data = self.policy._read_low_state()
-        if robot_state_data is None:
-            return self._fail("waist_locomotion_start_check_failed: low_state_unavailable")
-
+    def start_check(self, robot_state_data: LowState) -> tuple[bool, str | None]:
         joint_pos = robot_state_data.joint_pos[0]
         if not np.isfinite(joint_pos).all():
             return self._fail("waist_locomotion_start_check_failed: invalid_joint_position")
