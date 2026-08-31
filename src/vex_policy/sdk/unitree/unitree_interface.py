@@ -43,7 +43,7 @@ class UnitreeInterface(BaseInterface):
             self._unitree_motor_order = (3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8)
 
     def _get_low_state(self) -> LowState | None:
-        """Get the latest raw robot state in hardware joint order."""
+        """Get the latest SDK-cached robot state in configured joint order."""
         state = self.unitree_interface.read_low_state()
         if state is None:
             return None

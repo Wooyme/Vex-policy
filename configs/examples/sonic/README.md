@@ -5,7 +5,7 @@ modes. It is nested intentionally, so the existing default `../../g1`
 launch remains unchanged. Run all SONIC modes with:
 
 ```bash
-uv run vex-policy --policy-config configs/g1/sonic
+uv run vex-policy --policy-config configs/examples/sonic
 ```
 
 All configurations use the same decoder, encoder, and planner sessions; the

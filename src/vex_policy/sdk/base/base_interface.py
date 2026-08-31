@@ -15,7 +15,7 @@ from vex_policy.sdk.high_frequency_logger import HighFrequencyLogger
 
 @dataclass(frozen=True, slots=True)
 class LowState:
-    """One batch of raw low-level robot state in hardware joint order."""
+    """One normalized low-level robot state in configured joint order."""
 
     base_pos: np.ndarray
     base_quat: np.ndarray
@@ -112,8 +112,9 @@ class BaseInterface(ABC):
         Get the raw low-level robot state.
 
         Returns:
-            A structured state with a WXYZ base quaternion and hardware-order
-            joints, or ``None`` when no fresh state is available.
+            A structured state with a WXYZ base quaternion and configured-order
+            joints, or ``None`` when the backend cannot return a state. Backends
+            may return the same cached state in consecutive calls.
         """
         state = self._get_low_state()
         high_frequency_logger = self._high_frequency_logger

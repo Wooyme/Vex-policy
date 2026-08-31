@@ -2,11 +2,11 @@
 
 独立的 Unitree G1 ONNX policy 推理服务。控制命令只从 MQTT 读取，运行时可在多个已预加载 policy 之间安全切换，并发布真实机器人状态供 Vex 控制面板显示。
 
-本项目从 Holosoma 提交 `f5445d1b56a5bad39da17ce468df460477a3a1d5` 的 inference 包迁移而来，并迁入 GR00T-WholeBodyControl 提交 `c374bae5b9039cd0ee71377e654d11ce1bc69e1d` 的 GEAR-SONIC 部署闭环。策略、encoder、planner、DDS 命令缓存与 CRC 均由 Python 实现，不包含项目自有的 C++、CMake 或 TensorRT 代码。许可与来源见 `LICENSE`、`NOTICE`。
+本项目从 Holosoma 提交 `f5445d1b56a5bad39da17ce468df460477a3a1d5` 的 inference 包迁移而来，并迁入 GR00T-WholeBodyControl 提交 `c374bae5b9039cd0ee71377e654d11ce1bc69e1d` 的 GEAR-SONIC 部署闭环。策略、encoder 和 planner 由 Python 实现；DDS 订阅、状态/命令缓存、CRC 和低层命令发布线程由 `far-unitree-sdk` 的 C++/pybind11 binding 实现。本仓库不包含自有的 C++、CMake 或 TensorRT 代码。许可与来源见 `LICENSE`、`NOTICE`。
 
 ## 环境
 
-项目固定使用 uv 管理的 Python 3.11，并直接依赖 Unitree 官方 `unitree_sdk2py`：
+项目固定使用 uv 管理的 Python 3.11，并锁定 `far-unitree-sdk==0.1.4`。Python 侧导入的是该包提供的 `unitree_interface` binding，不是 `unitree_sdk2py`：
 
 ```bash
 
@@ -32,25 +32,53 @@ uv run vex-policy \
   --mqtt-config configs/mqtt.yaml \
   --mqtt-broker mqtt://localhost:1883 \
   --interface eth0 \
-  --domain-id 0 \
   --sdk-log-dir logs/sdk
 ```
 
 `--sdk-log-dir` 未指定时关闭 SDK 高频日志。启用后，每次运行会在目标目录创建独立会话目录，后台线程将
-`get_low_state` 的返回值（包括空读）和最终传给 `write_low_command` 的 motor-order 命令写成 5 秒一个的
-压缩 `chunk_*.npz`。控制线程只向有界内存队列提交快照；队列满时丢弃最旧记录，日志压缩或磁盘错误不会
-中断机器人控制。正常退出会刷新不足 5 秒的尾部分块，异常退出可能丢失尚未落盘的数据。日志不会自动清理。
+应用层 `get_low_state` 的返回值（包括空读）和应用层最终传给 `write_low_command` 的 motor-order 命令写成
+5 秒一个的压缩 `chunk_*.npz`。它记录的是 Python API 调用，不是 SDK 内部每个 DDS 收发包；默认 50 Hz 控制
+时通常每周期有一条 state 记录，只有稳定运行的 active policy 周期才有一条 command 记录。控制线程只向
+有界内存队列提交快照；队列满时丢弃最旧记录，日志压缩或磁盘错误不会中断机器人控制。正常退出会刷新
+不足 5 秒的尾部分块，异常退出可能丢失尚未落盘的数据。日志不会自动清理。
+
+## SDK 读写与频率
+
+进程中只由 `InterfaceManager` 创建并持有一个 robot interface。policy 不直接持有或调用 interface；所有
+LowState 读取和合成后的 LowCommand 写入都经过这个单例。配置加载时还会检查所有 policy 的 `rl_rate`
+完全一致，因此上下肢组合不会各自建立通信周期。
+
+以仓库锁定的 `far-unitree-sdk==0.1.4` 和默认 `rl_rate: 50.0` 为例，各层含义如下：
+
+| 层级 | 触发频率 | 实际行为 |
+| --- | --- | --- |
+| 机器人 → FAR SDK LowState | 由机器人发布端和 DDS 回调决定 | C++ 回调异步校验 CRC，并更新 SDK 内部的最新状态缓存；本项目不配置这个接收频率。 |
+| `PolicyStateMachine` → `get_low_state` | 每个 `rl_rate` 周期一次；默认 50 Hz，即 20 ms | `read_low_state()` 读取 C++ 最新缓存并转换为项目 joint order，不会为这次调用发起一次 DDS 网络读取。idle、锁存和切换周期也会读一次。 |
+| policy 推理 | 每个控制周期至多一次 | 单 policy 直接计算；同时运行的 upper/lower policy 在两个 worker 中并行计算，并共享同一个 LowState 对象。 |
+| 应用层 → `write_low_command` | 稳定 running 状态每周期一次，默认至多 50 Hz | 先按受控关节合成一条完整命令并转换为 motor order，再一次性更新 SDK 的命令缓存。两个 policy 不会分别写 SDK。 |
+| FAR SDK → 机器人 LowCmd | SDK 内部线程固定 2,000 us 周期，标称 500 Hz | C++ writer 读取最新命令缓存、生成 DDS 消息、计算 CRC 并发布；在应用层没有新命令时仍会重复发布缓存中的上一条命令。 |
+| MQTT robot state | `mqtt.state_frequency_hz`，默认 50 Hz | 只控制 MQTT 状态降采样，且必须不高于 `rl_rate`；不改变 SDK 的读写频率。 |
+
+这里的 500 Hz 只描述锁定版本 SDK 的 **LowCmd 发布线程**，不能据此认为 LowState 接收也是 500 Hz。
+应用层没有额外的 50 Hz reader 线程或二级状态缓存，所以不会人为再增加一个完整的 20 ms 缓存周期；一次
+tick 使用其开始时能取得的最新 SDK 快照，推理完成后更新命令缓存，SDK writer 通常会在下一个约 2 ms
+发布周期取到它（不包含操作系统调度和网络抖动）。本项目也没有“新帧”序号检查或 LowState 超时缓存，
+所以连续控制周期可能读到同一份底层样本。
+
+Unitree binding 返回的 `q`、`dq`、`ddq`、`tau_est` 会映射到 `LowState` 中与 `joint_pos` 相同的形状；某个
+字段缺失或长度不足时以 `np.zeros_like(joint_pos)` 补齐。由于 binding 当前不提供世界坐标 base position 和
+linear velocity，这两项同样为零。写入方向相反：policy joint order 的 `q/dq/tau/kp/kd` 先映射为 motor
+order，`write_low_command()` 只更新 C++ 缓存，真正的 DDS 发布发生在 SDK writer 线程。
+
+当前 Unitree backend 的 C++ binding 固定使用 DDS domain 0；虽然 CLI 仍接受 `--domain-id`，该值目前没有
+传入 `unitree_interface.create_robot()`，不能用它切换 DDS domain。
 
 ## 默认 policies
 
-服务启动时预加载并 retained 发布 `configs/g1/*.yaml` 中的 policy。`full_body` policy 互斥运行；一个
-`lower_body` 和一个 `upper_body` policy 可以同时选择并按关节合成命令。
-
-| name | implementation | accepted inputs |
-| --- | --- | --- |
-| `g1-ppo-locomotion` | PPO locomotion（lower body） | `vx`, `vy`, `yaw` |
-| `g1-sonic-slow-walk` | SONIC | `vx`, `vy`, `yaw`, `height` |
-| `g1-wbt-example` | PPO WBT | 无，选择后自动播放 clip |
+服务启动时预加载并 retained 发布所选目录顶层 `*.yaml` 中的 policy。默认 `configs/g1` 当前包含
+`g1-ppo-locomotion`、`ppo-doggy1`、`ppo-ridding1` 和四个 SONIC 起身/跪下转换 policy；名称、类型和输入
+以对应 YAML 为准。`full_body` policy 互斥运行；一个 `lower_body` 和一个 `upper_body` policy 可以同时选择
+并按关节合成命令。
 
 ## GEAR-SONIC
 
@@ -67,7 +95,7 @@ gear_sonic_deploy/planner/target_vel/V2/planner_sonic.onnx -> models/sonic/plann
 模型权重不提交到 Git。也可以在 YAML 中把三个路径改成部署机上的绝对路径。启动全部 27 个模式：
 
 ```bash
-uv run vex-policy --policy-config configs/g1/sonic --interface eth0
+uv run vex-policy --policy-config configs/examples/sonic --interface eth0
 ```
 
 三个 ONNX session 按模型路径和 provider 共享，27 个 policy 不会重复加载权重。默认 `inference_provider: auto` 优先 CUDA，缺少 CUDA provider 时回退 CPU；也可显式设为 `cpu` 或 `cuda`。
@@ -84,7 +112,7 @@ uv run vex-policy \
 
 配置按变化频率拆分：
 
-- `vex_policy/robots/g1.py`：稳定的 G1 硬件、关节映射、启动刚度与动作缩放常量。
+- `src/vex_policy/robots/g1.py`：稳定的 G1 硬件、关节映射、启动刚度与动作缩放常量。
 - `configs/g1/*.yaml`：每个文件只包含一个完整 policy，包括 observation 和 task；文件之间不使用 anchor 或继承。
 - `configs/g1/action_masks/*.yaml`：按关节名定义的模型输出 mask；该子目录不会被 policy 目录加载器扫描。
 - `configs/mqtt.yaml`：独立的 broker、topics、超时和发布频率配置。
@@ -156,9 +184,9 @@ inputs:
 ## Hold position
 
 `hold_position` 是不加载 ONNX 网络的保持策略，完整示例见 `configs/examples/g1_hold_position.yaml`。每次
-activate 时读取一次 LowState 并保存当时的全部 `dof_pos`，之后持续将该姿态作为位置目标；deactivate 后
-丢弃快照，因此再次 activate 会捕获新的姿态。它没有控制参数，使用 `inputs: []`，task 只配置控制频率、
-writer 频率、LowState 超时和可选的 `action_mask_path`。
+activate 使用当前状态机周期已经读取的共享 LowState，保存当时的全部 `dof_pos`，不会额外读取 SDK；之后
+持续将该姿态作为位置目标。deactivate 后丢弃快照，因此再次 activate 会捕获新的姿态。它没有控制参数，
+使用 `inputs: []`，task 只配置 `rl_rate` 和可选的 `action_mask_path`。
 
 该策略优先使用 robot config 的 `motor_kp/motor_kd`，缺失时使用 `stiff_startup_kp/stiff_startup_kd`。
 `action_mask_path` 与其他策略相同：被 mask 的关节不会写入组合命令，可交给同时运行的另一个身体区域策略。
@@ -166,7 +194,7 @@ writer 频率、LowState 超时和可选的 `action_mask_path`。
 
 ## MQTT 协议
 
-控制输入订阅 `robot/commands`（QoS 0），格式与 `../mujoco-arcade-robot-control-panel/src/hooks/useMqttClient.ts` 一致：
+控制输入订阅 `robot/commands`（QoS 0），格式与 `../vex-panel/src/hooks/useMqttClient.ts` 一致：
 
 ```json
 {
@@ -205,9 +233,11 @@ Unitree 低层接口当前没有世界位置估计，所以真实状态中的 `b
 
 - 启动状态为 `startup_latched`，不会发送任何低层命令。
 - 先收到 `estop=false` 且 `policy=[]` 才进入 `idle`；随后选择一个合法 policy 或上下半身组合才启动推理。
-- `estop=true`、合法命令超时、空 policy 和策略切换间隙都不会调用 `write_low_command`，但仍读取并发布机器人状态。
+- `estop=true`、合法命令超时、空 policy 和策略切换周期都不会在应用层调用 `write_low_command`，但仍读取并发布机器人状态。
+- “不调用 `write_low_command`”只表示不再更新 SDK 命令缓存：如果此前已经写过命令，FAR SDK 的 500 Hz writer 仍会重发最后一条缓存命令。这些状态机行为不是底层电机停机或阻尼命令。
 - 急停或超时解除后不会自动恢复；必须先发送非急停空 policy，再重新选择。
-- 选择变化时仅停止被移除的实例并初始化新增实例，未变化策略保留历史与相位；切换保留一个控制周期的低层命令空档。
+- 选择变化时仅停止被移除的实例并初始化新增实例，未变化策略保留历史与相位；切换时跳过一个控制周期的应用层命令更新，SDK 仍可能重发上一条缓存命令。
+
 ## 验证
 
 ```bash
@@ -216,4 +246,6 @@ uv run ruff check src tests
 uv build
 ```
 
-测试包含四个真实 ONNX 的加载/单步推理、共享 Unitree 接口、多 policy 切换与锁存、状态格式，以及本机 Mosquitto 真实往返。
+现有测试覆盖 SDK 日志分块/丢弃/错误隔离、BaseInterface 日志包装、InterfaceManager 单例、组合 policy
+每周期只读一次 LowState、上下肢并行计算，以及合成后只写一次命令；不包含真实机器人、真实 ONNX 推理或
+Mosquitto 集成测试。
