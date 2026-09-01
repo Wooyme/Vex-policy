@@ -23,7 +23,13 @@ dependencies = [
     "pyyaml>=6",
     "pyzmq>=26",
     "termcolor>=2.4",
-    ]
+]
+
+[project.optional-dependencies]
+viewer = [
+    "dash>=3,<4",
+    "plotly>=6,<7",
+]
 
 [dependency-groups]
 dev = [
@@ -35,6 +41,7 @@ dev = [
 
 [project.scripts]
 vex-policy = "vex_policy.cli:main"
+vex-log-viewer = "log_viewer.cli:main"
 
 [project.entry-points."vex_policy.sdk"]
 unitree = "vex_policy.sdk.unitree.unitree_interface:UnitreeInterface"
@@ -53,6 +60,9 @@ where = ["src"]
 [tool.setuptools.package-data]
 vex_policy = [
     "py.typed",
+]
+log_viewer = [
+    "assets/*.css",
 ]
 
 [tool.ruff]
