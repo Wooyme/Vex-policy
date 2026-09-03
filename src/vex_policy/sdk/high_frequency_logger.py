@@ -62,8 +62,8 @@ class _CommandRecord:
 class HighFrequencyLogger:
     """Move SDK log serialization and disk I/O off the control thread."""
 
-    SCHEMA_VERSION = 1
-    _OPTIONAL_STATE_FIELDS = ("q", "dq", "ddq", "tau_est")
+    SCHEMA_VERSION = 2
+    _OPTIONAL_STATE_FIELDS = ("q", "dq", "ddq", "tau_est", "motorstate")
 
     def __init__(self, config: HighFrequencyLogConfig, *, num_joints: int, num_motors: int):
         if num_joints <= 0 or num_motors <= 0:
@@ -169,22 +169,33 @@ class HighFrequencyLogger:
     def _copy_state_record(self, state: Any | None, *, wall_time_ns: int, monotonic_ns: int) -> _StateRecord:
         field_widths = self._state_field_widths()
         if state is None:
-            values = {name: np.zeros(width, dtype=np.float64) for name, width in field_widths.items()}
+            values = {
+                name: np.zeros(width, dtype=self._state_field_dtype(name))
+                for name, width in field_widths.items()
+            }
             present = {name: False for name in self._OPTIONAL_STATE_FIELDS}
             return _StateRecord(int(wall_time_ns), int(monotonic_ns), False, values, present)
 
         values: dict[str, np.ndarray] = {}
         for name, width in field_widths.items():
+            dtype = self._state_field_dtype(name)
             value = getattr(state, name, None)
             if value is None:
-                values[name] = np.zeros(width, dtype=np.float64)
+                values[name] = np.zeros(width, dtype=dtype)
             else:
-                values[name] = self._copy_vector(value, width, name)
+                values[name] = self._copy_vector(value, width, name, dtype=dtype)
         present = {name: getattr(state, name, None) is not None for name in self._OPTIONAL_STATE_FIELDS}
         return _StateRecord(int(wall_time_ns), int(monotonic_ns), True, values, present)
 
-    def _copy_vector(self, value: Any, width: int, name: str) -> np.ndarray:
-        array = np.asarray(value, dtype=np.float64).reshape(-1)
+    def _copy_vector(
+        self,
+        value: Any,
+        width: int,
+        name: str,
+        *,
+        dtype: np.dtype | type[np.generic] = np.float64,
+    ) -> np.ndarray:
+        array = np.asarray(value, dtype=dtype).reshape(-1)
         if array.size != width:
             raise ValueError(f"{name} must contain {width} values, got {array.size}")
         return array.copy()
@@ -201,7 +212,12 @@ class HighFrequencyLogger:
             "dq": self.num_joints,
             "ddq": self.num_joints,
             "tau_est": self.num_joints,
+            "motorstate": self.num_joints,
         }
+
+    @staticmethod
+    def _state_field_dtype(name: str) -> np.dtype:
+        return np.dtype(np.uint32) if name == "motorstate" else np.dtype(np.float64)
 
     def _enqueue(self, record: _StateRecord | _CommandRecord) -> None:
         with self._condition:
@@ -306,7 +322,9 @@ class HighFrequencyLogger:
 
         for name, width in self._state_field_widths().items():
             payload[f"state_{name}"] = self._stack_vectors(
-                [record.values[name] for record in states], width
+                [record.values[name] for record in states],
+                width,
+                dtype=self._state_field_dtype(name),
             )
         for name in self._OPTIONAL_STATE_FIELDS:
             payload[f"state_{name}_present"] = np.asarray(
@@ -338,9 +356,14 @@ class HighFrequencyLogger:
         return payload
 
     @staticmethod
-    def _stack_vectors(values: list[np.ndarray], width: int) -> np.ndarray:
+    def _stack_vectors(
+        values: list[np.ndarray],
+        width: int,
+        *,
+        dtype: np.dtype | type[np.generic] = np.float64,
+    ) -> np.ndarray:
         if not values:
-            return np.empty((0, width), dtype=np.float64)
+            return np.empty((0, width), dtype=dtype)
         return np.stack(values, axis=0)
 
 

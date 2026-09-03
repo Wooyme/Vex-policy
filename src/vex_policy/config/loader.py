@@ -16,6 +16,8 @@ from vex_policy.config.config_types import (
     RobotRuntimeConfig,
     RuntimeConfig,
     SonicTaskConfig,
+    UfoGuardConfig,
+    UfoTaskConfig,
     WaistLocomotionGuardConfig,
     WaistLocomotionTaskConfig,
 )
@@ -91,14 +93,17 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             path_fields.append("encoder_model_path")
             if spec.task.motion_source == "planner":
                 path_fields.append("planner_model_path")
-        elif spec.implementation == "waist_locomotion" and not isinstance(
-            spec.task, WaistLocomotionTaskConfig
-        ):
+        elif spec.implementation == "waist_locomotion" and not isinstance(spec.task, WaistLocomotionTaskConfig):
             raise ValueError(f"Policy {spec.name!r} requires WaistLocomotionTaskConfig")
-        elif spec.implementation == "waist_locomotion" and not isinstance(
-            spec.guard, WaistLocomotionGuardConfig
-        ):
+        elif spec.implementation == "waist_locomotion" and not isinstance(spec.guard, WaistLocomotionGuardConfig):
             raise ValueError(f"Policy {spec.name!r} requires WaistLocomotionGuardConfig")
+        elif spec.implementation == "ufo":
+            if not isinstance(spec.task, UfoTaskConfig):
+                raise ValueError(f"Policy {spec.name!r} requires UfoTaskConfig")
+            if spec.type != "full_body":
+                raise ValueError(f"UFO policy {spec.name!r} must be full_body")
+            if spec.task.action_mask_path is not None:
+                raise ValueError(f"UFO policy {spec.name!r} does not support action masks")
         resolved_paths: dict[str, str] = {}
         for field_name in path_fields:
             model_path = getattr(spec.task, field_name, None)
@@ -110,6 +115,14 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             if not candidate.is_file():
                 raise ValueError(f"Policy {spec.name!r} model file does not exist: {candidate}")
             resolved_paths[field_name] = str(candidate)
+        if isinstance(spec.task, UfoTaskConfig):
+            context_path = spec.task.context.path
+            if "://" in context_path:
+                raise ValueError(f"Policy {spec.name!r} context.path must reference a local file")
+            context_candidate = Path(context_path).expanduser().resolve()
+            if not context_candidate.is_file():
+                raise ValueError(f"Policy {spec.name!r} context file does not exist: {context_candidate}")
+            resolved_paths["context"] = spec.task.context.model_copy(update={"path": str(context_candidate)})
         if spec.implementation == "sonic" and spec.task.motion_source == "directory":
             motion_data_path = spec.task.motion_data_path
             if not motion_data_path:

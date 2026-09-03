@@ -13,10 +13,11 @@ from vex_policy.compat import entry_points
 from vex_policy.config import ResolvedPolicy
 from vex_policy.config.config_types import RuntimeConfig
 from vex_policy.mqtt import CommandInbox, MqttTransport, encode_robot_state
-from vex_policy.policies.base import BasePolicy
+from vex_policy.policies.base import BasePolicy, PolicyRuntimeFault
 from vex_policy.policies.hold_position import HoldPositionPolicy
 from vex_policy.policies.locomotion import LocomotionPolicy
 from vex_policy.policies.sonic import SonicPolicy
+from vex_policy.policies.ufo import UfoPolicy
 from vex_policy.policies.waist_locomotion import WaistLocomotionPolicy
 from vex_policy.policies.wbt import WholeBodyTrackingPolicy
 from vex_policy.sdk import InterfaceManager
@@ -36,6 +37,8 @@ def _policy_class(kind: str) -> type[BasePolicy]:
         return WholeBodyTrackingPolicy
     if kind == "sonic":
         return SonicPolicy
+    if kind == "ufo":
+        return UfoPolicy
     if kind == "waist_locomotion":
         return WaistLocomotionPolicy
     raise ValueError(f"Unknown policy kind: {kind}")
@@ -244,15 +247,27 @@ class PolicyStateMachine:
             self._publish_status()
             return  # deliberate one-cycle low-command gap during a switch
 
-        for name in desired:
-            policy = self.policies[name]
-            policy.apply_control(control.inputs[name])
+        try:
+            for name in desired:
+                policy = self.policies[name]
+                policy.apply_control(control.inputs[name])
+        except PolicyRuntimeFault as error:
+            self._latch(f"policy_fault:{'+'.join(desired)}:{error}")
+            self._publish_idle_state(robot_state, current)
+            self._publish_status()
+            return
         if robot_state is None:
             self._latch("low_state_unavailable")
             self._publish_idle_state(robot_state, current)
             self._publish_status()
             return
-        self._step_active_policies(robot_state)
+        try:
+            self._step_active_policies(robot_state)
+        except PolicyRuntimeFault as error:
+            self._latch(f"policy_fault:{'+'.join(desired)}:{error}")
+            self._publish_idle_state(robot_state, current)
+            self._publish_status()
+            return
         self.state = "running"
         self.reason = None
         self._publish_status()

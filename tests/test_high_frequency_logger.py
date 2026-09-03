@@ -25,6 +25,7 @@ def _low_state(offset: float = 0.0) -> LowState:
         dq=joint_vel.copy(),
         ddq=joint_vel + 10,
         tau_est=joint_vel + 20,
+        motorstate=np.asarray([[0, 7, 42]], dtype=np.uint32),
     )
 
 
@@ -58,7 +59,7 @@ def test_high_frequency_logger_flushes_versioned_state_and_command_chunk(tmp_pat
     high_frequency_logger.close()
 
     with _load_only_chunk(high_frequency_logger) as chunk:
-        assert int(chunk["schema_version"]) == 1
+        assert int(chunk["schema_version"]) == 2
         assert int(chunk["num_joints"]) == 3
         assert int(chunk["num_motors"]) == 3
         np.testing.assert_array_equal(chunk["state_wall_time_ns"], [100, 200])
@@ -66,6 +67,10 @@ def test_high_frequency_logger_flushes_versioned_state_and_command_chunk(tmp_pat
         np.testing.assert_array_equal(chunk["state_joint_pos"][0], [0, 1, 2])
         np.testing.assert_array_equal(chunk["state_joint_pos"][1], [0, 0, 0])
         np.testing.assert_array_equal(chunk["state_q_present"], [True, False])
+        np.testing.assert_array_equal(chunk["state_motorstate"][0], [0, 7, 42])
+        np.testing.assert_array_equal(chunk["state_motorstate"][1], [0, 0, 0])
+        np.testing.assert_array_equal(chunk["state_motorstate_present"], [True, False])
+        assert chunk["state_motorstate"].dtype == np.uint32
         np.testing.assert_array_equal(chunk["command_q_target"], [[1, 2, 3]])
         np.testing.assert_array_equal(chunk["command_success"], [False])
         assert chunk["command_error_type"].tolist() == ["RuntimeError"]
@@ -139,6 +144,7 @@ class _FakeUnitreeSdk:
                 dq=[40, 50, 60],
                 ddq=[70, 80, 90],
                 tau_est=[100, 110, 120],
+                motorstate=[1, 2, 3],
             ),
         )
         self.commands = []
@@ -178,6 +184,8 @@ def test_unitree_interface_logs_returned_state_and_final_motor_command():
     low_state = interface.get_low_state()
     assert interface._high_frequency_logger.states == [low_state]
     np.testing.assert_array_equal(low_state.q, [[30, 10, 20]])
+    np.testing.assert_array_equal(low_state.motorstate, [[3, 1, 2]])
+    assert low_state.motorstate.dtype == np.uint32
 
     interface.send_low_command(
         np.asarray([1.0, 2.0, 3.0]),

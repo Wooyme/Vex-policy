@@ -53,27 +53,32 @@ class UnitreeInterface(BaseInterface):
         base_lin_vel = np.zeros((1, 3))
         base_ang_vel = np.asarray(state.imu.omega).reshape(1, 3)
 
-        empty_joint_values = np.zeros((1, self.robot_config.num_joints))
         motor_order = self._unitree_motor_order or self.robot_config.joint2motor
 
-        def read_motor_values(name: str) -> np.ndarray:
+        def read_motor_values(
+            name: str,
+            *,
+            dtype: np.dtype | type[np.generic] = np.float64,
+        ) -> np.ndarray:
+            empty_values = np.zeros((1, self.robot_config.num_joints), dtype=dtype)
             motor_values = getattr(state.motor, name, None)
             if motor_values is None:
-                return np.zeros_like(empty_joint_values)
+                return empty_values
 
-            motor_values = np.asarray(motor_values).reshape(-1)
+            motor_values = np.asarray(motor_values, dtype=dtype).reshape(-1)
             if len(motor_values) <= max(motor_order):
-                return np.zeros_like(empty_joint_values)
+                return empty_values
 
-            joint_values = np.zeros_like(empty_joint_values)
+            joint_values = empty_values
             for j_id in range(self.robot_config.num_joints):
-                joint_values[0, j_id] = float(motor_values[motor_order[j_id]])
+                joint_values[0, j_id] = motor_values[motor_order[j_id]]
             return joint_values
 
         q = read_motor_values("q")
         dq = read_motor_values("dq")
         ddq = read_motor_values("ddq")
         tau_est = read_motor_values("tau_est")
+        motorstate = read_motor_values("motorstate", dtype=np.uint32)
 
         return LowState(
             base_pos=base_pos,
@@ -86,6 +91,7 @@ class UnitreeInterface(BaseInterface):
             dq=dq,
             ddq=ddq,
             tau_est=tau_est,
+            motorstate=motorstate,
         )
 
     def _prepare_low_command(

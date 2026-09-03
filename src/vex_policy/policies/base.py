@@ -33,6 +33,10 @@ class PolicyJointCommand:
     controlled_joints: np.ndarray
 
 
+class PolicyRuntimeFault(RuntimeError):
+    """Expected policy data/inference fault that must latch the runtime safely."""
+
+
 class BasePolicy:
     """
     Base policy class for MQTT-controlled inference on humanoid robots.

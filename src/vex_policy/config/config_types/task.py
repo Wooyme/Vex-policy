@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.dataclasses import dataclass
 
 
@@ -78,3 +78,80 @@ class WaistLocomotionTaskConfig(TaskConfig):
     def __post_init__(self) -> None:
         if not self.motion_data_path or not self.motion_data_path.strip():
             raise ValueError("motion_data_path must not be empty")
+
+
+class UfoContextBase(BaseModel):
+    """Strict local latent-context configuration for a UFO policy."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    path: str
+
+    @field_validator("path")
+    @classmethod
+    def nonempty_path(cls, value: str) -> str:
+        if not value or value.strip() != value:
+            raise ValueError("path must be non-empty and have no surrounding whitespace")
+        return value
+
+
+class UfoTrackingContextConfig(UfoContextBase):
+    type: Literal["tracking"]
+    start_frame: int = Field(default=0, ge=0)
+    end_frame: int | None = Field(default=None, gt=0)
+    stop_frame: int = Field(default=0, ge=0)
+    gamma: float = Field(default=0.8, gt=0.0, le=1.0, allow_inf_nan=False)
+    window_size: int = Field(default=3, ge=1)
+
+    @model_validator(mode="after")
+    def valid_frame_range(self) -> UfoTrackingContextConfig:
+        if self.end_frame is not None and self.end_frame <= self.start_frame:
+            raise ValueError("end_frame must be greater than start_frame")
+        return self
+
+
+class UfoRewardContextConfig(UfoContextBase):
+    type: Literal["reward"]
+    name: str
+    z_id: int = Field(default=0, ge=0)
+
+    @field_validator("name")
+    @classmethod
+    def nonempty_name(cls, value: str) -> str:
+        if not value or value.strip() != value:
+            raise ValueError("name must be non-empty and have no surrounding whitespace")
+        return value
+
+
+class UfoGoalContextConfig(UfoContextBase):
+    type: Literal["goal"]
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def nonempty_name(cls, value: str) -> str:
+        if not value or value.strip() != value:
+            raise ValueError("name must be non-empty and have no surrounding whitespace")
+        return value
+
+
+UfoContextConfig = Annotated[
+    UfoTrackingContextConfig | UfoRewardContextConfig | UfoGoalContextConfig,
+    Field(discriminator="type"),
+]
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class UfoTaskConfig:
+    """UFO-Deploy G1 policy and latent-context configuration."""
+
+    model_path: str
+    context: UfoContextConfig
+    action_mask_path: str | None = None
+    rl_rate: float = Field(default=50.0, gt=0.0, allow_inf_nan=False)
+    inference_provider: Literal["auto", "cpu", "cuda"] = "cpu"
+    startup_mode: Literal["prefill", "interpolate"] = "interpolate"
+    init_duration_s: float = Field(default=10.0, gt=0.0, allow_inf_nan=False)
+    q_target_slew_safety_factor: float = Field(default=0.5, ge=0.0, allow_inf_nan=False)
+    print_observations: bool = False
+    debug: DebugConfig = DebugConfig()

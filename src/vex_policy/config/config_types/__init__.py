@@ -2,7 +2,7 @@
 
 from .action_mask import ActionMaskConfig
 from .control import InputParameter, JoystickInput, PolicyInput, SliderInput, input_parameters
-from .GuardConfig import GuardConfig, WaistLocomotionGuardConfig
+from .GuardConfig import GuardConfig, UfoGuardConfig, WaistLocomotionGuardConfig
 from .inference import InferenceConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
@@ -13,7 +13,18 @@ from .runtime import (
     RobotRuntimeConfig,
     RuntimeConfig,
 )
-from .task import DebugConfig, HoldPositionTaskConfig, SonicTaskConfig, TaskConfig, WaistLocomotionTaskConfig
+from .task import (
+    DebugConfig,
+    HoldPositionTaskConfig,
+    SonicTaskConfig,
+    TaskConfig,
+    UfoContextConfig,
+    UfoGoalContextConfig,
+    UfoRewardContextConfig,
+    UfoTaskConfig,
+    UfoTrackingContextConfig,
+    WaistLocomotionTaskConfig,
+)
 
 __all__ = [
     "ActionMaskConfig",
@@ -34,6 +45,12 @@ __all__ = [
     "SliderInput",
     "SonicTaskConfig",
     "TaskConfig",
+    "UfoContextConfig",
+    "UfoGoalContextConfig",
+    "UfoGuardConfig",
+    "UfoRewardContextConfig",
+    "UfoTaskConfig",
+    "UfoTrackingContextConfig",
     "WaistLocomotionGuardConfig",
     "WaistLocomotionTaskConfig",
     "input_parameters",

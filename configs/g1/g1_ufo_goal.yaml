@@ -1,0 +1,60 @@
+name: g1-ufo-goal-walk3
+implementation: ufo
+type: full_body
+inputs: []
+observation:
+  obs_dict:
+    actor_obs:
+    - dof_pos_minus_default
+    - dof_vel
+    - projected_gravity
+    - base_ang_vel
+    - prev_actions
+    - prev_actions_history
+    - base_ang_vel_history
+    - dof_pos_minus_default_history
+    - dof_vel_history
+    - projected_gravity_history
+  obs_dims:
+    dof_pos_minus_default: 29
+    dof_vel: 29
+    projected_gravity: 3
+    base_ang_vel: 3
+    prev_actions: 29
+    prev_actions_history: 116
+    base_ang_vel_history: 12
+    dof_pos_minus_default_history: 116
+    dof_vel_history: 116
+    projected_gravity_history: 12
+  obs_scales:
+    dof_pos_minus_default: 1.0
+    dof_vel: 1.0
+    projected_gravity: 1.0
+    base_ang_vel: 0.25
+    prev_actions: 1.0
+    prev_actions_history: 1.0
+    base_ang_vel_history: 0.25
+    dof_pos_minus_default_history: 1.0
+    dof_vel_history: 1.0
+    projected_gravity_history: 1.0
+  history_length_dict: {actor_obs: 1}
+task:
+  startup_mode: prefill
+  model_path: ../../UFO/model/g1_policy/exported/FBcprAuxModel.onnx
+  context:
+    type: goal
+    path: ../../UFO/model/g1_policy/goal_inference_mjlab/goal_reaching.pkl
+    name: walk3_subject3_9044
+  action_mask_path: null
+  rl_rate: 50.0
+  inference_provider: cpu
+  init_duration_s: 10.0
+  q_target_slew_safety_factor: 0.5
+  print_observations: false
+  debug:
+    force_upright_imu: false
+    force_zero_angular_velocity: false
+    force_zero_action: false
+#guard:
+#  startup_joint_tolerance_rad: 1.0
+#  startup_gravity_tolerance: 1.0

@@ -26,6 +26,7 @@ def _write_chunk(
     dropped_state_count: int = 0,
     dropped_command_count: int = 0,
     malformed: bool = False,
+    schema_version: int = 2,
 ) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     state_count = len(state_times)
@@ -34,7 +35,7 @@ def _write_chunk(
     command_vectors = np.arange(command_count * width, dtype=np.float64).reshape(command_count, width)
     wall_times = [*state_times, *command_times] or [index]
     payload = {
-        "schema_version": np.asarray(1, dtype=np.uint16),
+        "schema_version": np.asarray(schema_version, dtype=np.uint16),
         "session_id": np.asarray(session_id),
         "chunk_index": np.asarray(index, dtype=np.uint64),
         "chunk_started_wall_time_ns": np.asarray(min(wall_times), dtype=np.uint64),
@@ -72,6 +73,9 @@ def _write_chunk(
         "command_kp": command_vectors + 30,
         "command_kd": command_vectors + 40,
     }
+    if schema_version >= 2:
+        payload["state_motorstate"] = np.asarray(state_vectors, dtype=np.uint32)
+        payload["state_motorstate_present"] = np.ones(state_count, dtype=np.bool_)
     if malformed:
         payload["state_joint_pos"] = np.zeros((state_count, width + 1))
     path = directory / f"chunk_{index:06d}.npz"
@@ -132,6 +136,21 @@ def test_load_skips_malformed_chunk_and_keeps_valid_data(tmp_path):
     data = load_session(discover_sessions(tmp_path).sessions[0])
     np.testing.assert_array_equal(data.arrays["state_monotonic_ns"], [10, 20])
     assert any("数据校验失败" in warning for warning in data.warnings)
+
+
+def test_loads_schema_v1_with_motorstate_marked_unavailable(tmp_path):
+    _write_chunk(
+        tmp_path / "legacy-session",
+        0,
+        state_times=[10, 20],
+        command_times=[],
+        schema_version=1,
+    )
+
+    data = load_session(discover_sessions(tmp_path).sessions[0])
+    assert data.info.schema_version == 1
+    np.testing.assert_array_equal(data.arrays["state_motorstate"], np.zeros((2, 3)))
+    np.testing.assert_array_equal(data.arrays["state_motorstate_present"], [False, False])
 
 
 def test_metrics_use_median_period_and_cumulative_drop_counts(tmp_path):
@@ -239,3 +258,10 @@ def test_g1_joint_plot_overlays_actual_and_motor_target(tmp_path):
         "left_hip_pitch_joint · tau_est",
         "left_hip_pitch_joint · tau_ff",
     ]
+
+    motorstate_figure = make_joint_figure(data, "motorstate", [0])
+    assert motorstate_figure.layout.title.text == "电机状态码 motorstate"
+    assert [trace.name for trace in motorstate_figure.data] == [
+        "left_hip_pitch_joint · motorstate",
+    ]
+    assert motorstate_figure.data[0].line.shape == "hv"

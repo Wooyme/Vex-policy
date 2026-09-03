@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from vex_policy.policies.base import PolicyJointCommand
+from vex_policy.policies.base import PolicyJointCommand, PolicyRuntimeFault
 from vex_policy.policies.policy_state_machine import PolicyStateMachine
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.sdk.interface_manager import InterfaceManager
@@ -219,3 +219,30 @@ def test_activation_reuses_the_tick_state_snapshot():
     assert lower.activated == [state]
     assert upper.activated == [state]
 
+
+def test_policy_runtime_fault_latches_without_writing_command():
+    state = _low_state()
+    backend = _FakeInterface(state)
+    manager = InterfaceManager(backend)
+    policy = _ParallelPolicy(threading.Barrier(1), _command([1, 2, 3], [True, True, True], 10))
+    policy.step = lambda robot_state: (_ for _ in ()).throw(PolicyRuntimeFault("invalid_action"))
+    machine = _state_machine(manager, policy, policy)
+    machine.policies = {"lower": policy}
+    machine.active_policy = ("lower",)
+    control = SimpleNamespace(policy=("lower",), estop=False, inputs={"lower": {}})
+    machine.inbox = SimpleNamespace(
+        snapshot=lambda: SimpleNamespace(
+            received_at=0.0,
+            packet=SimpleNamespace(seq=9, control=control),
+        )
+    )
+
+    try:
+        machine.tick(now=0.0)
+    finally:
+        machine._policy_executor.shutdown(wait=True)
+
+    assert machine.state == "latched"
+    assert machine.active_policy == ()
+    assert machine.reason == "policy_fault:lower:invalid_action"
+    assert not backend.commands

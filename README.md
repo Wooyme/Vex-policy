@@ -6,7 +6,7 @@
 
 ## 环境
 
-项目固定使用 uv 管理的 Python 3.11，并锁定 `far-unitree-sdk==0.1.4`。Python 侧导入的是该包提供的 `unitree_interface` binding，不是 `unitree_sdk2py`：
+项目固定使用 uv 管理的 Python 3.11，并锁定 `far-unitree-sdk==0.1.7`。Python 侧导入的是该包提供的 `unitree_interface` binding，不是 `unitree_sdk2py`：
 
 ```bash
 
@@ -53,7 +53,7 @@ uv run --extra viewer vex-log-viewer --log-dir logs
 
 浏览器打开终端中显示的 `http://127.0.0.1:8050`，即可在已有会话之间切换，查看调用频率、控制周期抖动、
 命令写入耗时、无效状态、失败命令、队列丢弃，以及关节和基座时序曲线。关节页面可以对照实际位置、速度、
-估算力矩与对应目标命令，并查看 KP/KD。29 维 G1 日志显示关节名称；其他维度使用数字索引，且不会进行无法
+估算力矩与对应目标命令，并查看电机状态码 `motorstate` 和 KP/KD。29 维 G1 日志显示关节名称；其他维度使用数字索引，且不会进行无法
 确认顺序的 state/command 叠加。
 
 查看器是离线快照：启动时只扫描已经完成原子重命名的 `chunk_*.npz`，忽略 `.partial`，不会自动读取后来
@@ -72,7 +72,7 @@ uv run --extra viewer vex-log-viewer \
 LowState 读取和合成后的 LowCommand 写入都经过这个单例。配置加载时还会检查所有 policy 的 `rl_rate`
 完全一致，因此上下肢组合不会各自建立通信周期。
 
-以仓库锁定的 `far-unitree-sdk==0.1.4` 和默认 `rl_rate: 50.0` 为例，各层含义如下：
+以仓库锁定的 `far-unitree-sdk==0.1.7` 和默认 `rl_rate: 50.0` 为例，各层含义如下：
 
 | 层级 | 触发频率 | 实际行为 |
 | --- | --- | --- |
@@ -89,7 +89,7 @@ tick 使用其开始时能取得的最新 SDK 快照，推理完成后更新命�
 发布周期取到它（不包含操作系统调度和网络抖动）。本项目也没有“新帧”序号检查或 LowState 超时缓存，
 所以连续控制周期可能读到同一份底层样本。
 
-Unitree binding 返回的 `q`、`dq`、`ddq`、`tau_est` 会映射到 `LowState` 中与 `joint_pos` 相同的形状；某个
+Unitree binding 返回的 `q`、`dq`、`ddq`、`tau_est`、`motorstate` 会映射到 `LowState` 中与 `joint_pos` 相同的形状；某个
 字段缺失或长度不足时以 `np.zeros_like(joint_pos)` 补齐。由于 binding 当前不提供世界坐标 base position 和
 linear velocity，这两项同样为零。写入方向相反：policy joint order 的 `q/dq/tau/kp/kd` 先映射为 motor
 order，`write_low_command()` 只更新 C++ 缓存，真正的 DDS 发布发生在 SDK writer 线程。
@@ -133,6 +133,30 @@ uv run vex-policy \
 ```
 
 `motion_data_path` 可以指向一个动作目录，也可以指向包含多个动作子目录的集合；集合中有多个有效动作时需要填写 `motion_name`。每个动作目录包含带表头的 `joint_pos.csv`、`joint_vel.csv`、`body_pos.csv` 和 `body_quat.csv`，采样率为 50Hz，29 个关节列使用 IsaacLab/policy 顺序，根四元数使用 `wxyz`。`motion_loop: false` 会在动作末帧保持，设为 `true` 则循环播放。目录模式只加载 decoder 和 encoder，不校验也不创建 planner session。
+
+## UFO-Deploy
+
+`configs/examples/ufo/` 提供 UFO G1 发布策略的离线 tracking、reward 和 goal 示例。默认路径引用同级
+`../../UFO/model/g1_policy` 发布物；模型和 context 也可以改为部署机上的任意绝对路径或相对启动工作目录的
+本地路径。启动三类示例：
+
+```bash
+uv run vex-policy --policy-config configs/examples/ufo --interface eth0
+```
+
+每个 reward/goal YAML 固定选择一个命名 latent，通过 policy 名切换，不需要新的 MQTT 输入类型。reward
+使用不依赖 Torch 的 `reward_locomotion_numpy.pkl`。多个 UFO policy 共享同一路径/provider 的 ONNX session。
+
+选中 UFO policy 后会先用其发布 KP/KD 和目标限速，在 10 秒内插值到 UFO 默认站姿；推理同时运行以预热
+4 帧历史，完成后才推进 tracking。tracking 播放到 `end_frame` 后固定使用 `stop_frame` latent。状态、context、
+推理动作或最终目标出现非法值时，本周期不会写命令且服务进入全局 `latched`；需先发送非急停空 policy，
+再重新选择。UFO context 使用 pickle/joblib 格式，只应加载可信发布物。本集成不包含实时 ZMQ/PICO teleop
+或 backward encoder。
+
+将 `task.startup_mode` 设为 `prefill` 可跳过 10 秒插值，由当前关节姿态反算等价 residual action，并立即
+填满 4 帧 observation/action 历史；该配置只接受 `prefill` 和 `interpolate`。启动姿态检查与模式独立，
+由顶层 `guard.startup_joint_tolerance_rad` 和 `guard.startup_gravity_tolerance` 配置、独立的 `UfoGuard`
+执行；检查失败时拒绝激活并进入锁存。
 
 配置按变化频率拆分：
 

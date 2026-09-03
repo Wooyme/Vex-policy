@@ -27,6 +27,7 @@ class LowState:
     dq: np.ndarray | None = None
     ddq: np.ndarray | None = None
     tau_est: np.ndarray | None = None
+    motorstate: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         expected_shapes = {
@@ -53,7 +54,7 @@ class LowState:
                 f"got {self.joint_pos.shape} and {self.joint_vel.shape}"
             )
 
-        for name in ("q", "dq", "ddq", "tau_est"):
+        for name in ("q", "dq", "ddq", "tau_est", "motorstate"):
             value = getattr(self, name)
             if value is not None and (not isinstance(value, np.ndarray) or value.shape != self.joint_pos.shape):
                 shape = getattr(value, "shape", None)

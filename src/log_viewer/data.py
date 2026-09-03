@@ -9,7 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
-SUPPORTED_SCHEMA_VERSION = 1
+SUPPORTED_SCHEMA_VERSION = 2
+_SUPPORTED_SCHEMA_VERSIONS = (1, SUPPORTED_SCHEMA_VERSION)
 
 _STATE_VECTORS = {
     "state_base_pos": 3,
@@ -22,6 +23,7 @@ _STATE_VECTORS = {
     "state_dq": "joints",
     "state_ddq": "joints",
     "state_tau_est": "joints",
+    "state_motorstate": "joints",
 }
 _COMMAND_VECTORS = {
     "command_q_target": "motors",
@@ -38,6 +40,7 @@ _STATE_ROWS = (
     "state_dq_present",
     "state_ddq_present",
     "state_tau_est_present",
+    "state_motorstate_present",
 )
 _COMMAND_ROWS = (
     "command_wall_time_ns",
@@ -63,6 +66,7 @@ class SessionInfo:
     ended_wall_time_ns: int
     num_joints: int
     num_motors: int
+    schema_version: int = SUPPORTED_SCHEMA_VERSION
     warnings: tuple[str, ...] = ()
 
 
@@ -91,6 +95,7 @@ class _ChunkMetadata:
     path: Path
     index: int
     session_id: str
+    schema_version: int
     started_wall_time_ns: int
     ended_wall_time_ns: int
     num_joints: int
@@ -117,7 +122,7 @@ def discover_sessions(log_dir: Path | str) -> Catalog:
                 warnings.append(f"{path.name}: 无法读取元数据 ({exc})")
 
         if not metadata:
-            catalog_warnings.append(f"{session_path}: 没有可读取的 schema v1 chunk")
+            catalog_warnings.append(f"{session_path}: 没有可读取的受支持 schema chunk")
             continue
 
         metadata.sort(key=lambda item: item.index)
@@ -128,11 +133,12 @@ def discover_sessions(log_dir: Path | str) -> Catalog:
             if chunk.session_id != reference.session_id:
                 warnings.append(f"{chunk.path.name}: session_id 与本会话不一致, 已跳过")
                 continue
-            if (chunk.num_joints, chunk.num_motors) != (
+            if (chunk.schema_version, chunk.num_joints, chunk.num_motors) != (
+                reference.schema_version,
                 reference.num_joints,
                 reference.num_motors,
             ):
-                warnings.append(f"{chunk.path.name}: 关节或电机维度不一致, 已跳过")
+                warnings.append(f"{chunk.path.name}: schema 或关节/电机维度不一致, 已跳过")
                 continue
             if chunk.index in seen_indices:
                 warnings.append(f"{chunk.path.name}: chunk_index={chunk.index} 重复, 已跳过")
@@ -155,6 +161,7 @@ def discover_sessions(log_dir: Path | str) -> Catalog:
                 key=str(resolved_path),
                 path=resolved_path,
                 session_id=reference.session_id,
+                schema_version=reference.schema_version,
                 chunk_paths=tuple(chunk.path.resolve() for chunk in accepted),
                 chunk_indices=indices,
                 started_wall_time_ns=min(chunk.started_wall_time_ns for chunk in accepted),
@@ -182,8 +189,16 @@ def load_session(info: SessionInfo) -> SessionData:
         try:
             with np.load(path, allow_pickle=False) as chunk:
                 _validate_chunk_arrays(chunk, info, expected_index)
-                for name in _ALL_ARRAYS:
+                for name in _arrays_for_schema(info.schema_version):
                     columns[name].append(np.asarray(chunk[name]))
+                if info.schema_version == 1:
+                    state_count = len(chunk["state_wall_time_ns"])
+                    columns["state_motorstate"].append(
+                        np.zeros((state_count, info.num_joints), dtype=np.uint32)
+                    )
+                    columns["state_motorstate_present"].append(
+                        np.zeros(state_count, dtype=np.bool_)
+                    )
                 dropped_state_count = max(dropped_state_count, int(chunk["dropped_state_count"]))
                 dropped_command_count = max(dropped_command_count, int(chunk["dropped_command_count"]))
         except (OSError, ValueError, KeyError) as exc:
@@ -208,14 +223,15 @@ def load_session(info: SessionInfo) -> SessionData:
 def _read_chunk_metadata(path: Path) -> _ChunkMetadata:
     with np.load(path, allow_pickle=False) as chunk:
         schema_version = int(chunk["schema_version"])
-        if schema_version != SUPPORTED_SCHEMA_VERSION:
+        if schema_version not in _SUPPORTED_SCHEMA_VERSIONS:
             raise ValueError(
-                f"不支持 schema_version={schema_version}, 当前仅支持 {SUPPORTED_SCHEMA_VERSION}"
+                f"不支持 schema_version={schema_version}, 当前支持 {_SUPPORTED_SCHEMA_VERSIONS}"
             )
         return _ChunkMetadata(
             path=path,
             index=int(chunk["chunk_index"]),
             session_id=str(chunk["session_id"]),
+            schema_version=schema_version,
             started_wall_time_ns=int(chunk["chunk_started_wall_time_ns"]),
             ended_wall_time_ns=int(chunk["chunk_ended_wall_time_ns"]),
             num_joints=int(chunk["num_joints"]),
@@ -224,7 +240,7 @@ def _read_chunk_metadata(path: Path) -> _ChunkMetadata:
 
 
 def _validate_chunk_arrays(chunk: np.lib.npyio.NpzFile, info: SessionInfo, expected_index: int) -> None:
-    if int(chunk["schema_version"]) != SUPPORTED_SCHEMA_VERSION:
+    if int(chunk["schema_version"]) != info.schema_version:
         raise ValueError("schema_version 已变化")
     if str(chunk["session_id"]) != info.session_id:
         raise ValueError("session_id 已变化")
@@ -235,11 +251,12 @@ def _validate_chunk_arrays(chunk: np.lib.npyio.NpzFile, info: SessionInfo, expec
 
     state_count = _row_count(chunk, "state_wall_time_ns")
     command_count = _row_count(chunk, "command_wall_time_ns")
-    for name in _STATE_ROWS:
+    state_rows, state_vectors = _state_arrays_for_schema(info.schema_version)
+    for name in state_rows:
         _expect_shape(chunk, name, (state_count,))
     for name in _COMMAND_ROWS:
         _expect_shape(chunk, name, (command_count,))
-    for name, width in _STATE_VECTORS.items():
+    for name, width in state_vectors.items():
         expected_width = info.num_joints if width == "joints" else width
         _expect_shape(chunk, name, (state_count, expected_width))
     for name, width in _COMMAND_VECTORS.items():
@@ -263,7 +280,8 @@ def _expect_shape(chunk: np.lib.npyio.NpzFile, name: str, shape: tuple[int, ...]
 def _empty_array(name: str, num_joints: int, num_motors: int) -> np.ndarray:
     if name in _STATE_VECTORS:
         width = _STATE_VECTORS[name]
-        return np.empty((0, num_joints if width == "joints" else width), dtype=np.float64)
+        dtype = np.uint32 if name == "state_motorstate" else np.float64
+        return np.empty((0, num_joints if width == "joints" else width), dtype=dtype)
     if name in _COMMAND_VECTORS:
         width = _COMMAND_VECTORS[name]
         return np.empty((0, num_motors if width == "motors" else width), dtype=np.float64)
@@ -275,10 +293,22 @@ def _empty_array(name: str, num_joints: int, num_motors: int) -> np.ndarray:
         "state_dq_present",
         "state_ddq_present",
         "state_tau_est_present",
+        "state_motorstate_present",
         "command_success",
     }:
         return np.empty(0, dtype=np.bool_)
     return np.empty(0, dtype=np.uint64)
+
+
+def _state_arrays_for_schema(schema_version: int) -> tuple[tuple[str, ...], dict[str, int | str]]:
+    if schema_version == 1:
+        return _STATE_ROWS[:-1], dict(tuple(_STATE_VECTORS.items())[:-1])
+    return _STATE_ROWS, _STATE_VECTORS
+
+
+def _arrays_for_schema(schema_version: int) -> tuple[str, ...]:
+    state_rows, state_vectors = _state_arrays_for_schema(schema_version)
+    return (*state_rows, *state_vectors, *_COMMAND_ROWS, *_COMMAND_VECTORS)
 
 
 __all__ = [

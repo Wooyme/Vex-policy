@@ -116,6 +116,10 @@ def create_app(catalog: Catalog) -> Dash:
                                                                 "label": "估算力矩 tau_est / 前馈力矩 tau_ff",
                                                                 "value": "torque",
                                                             },
+                                                            {
+                                                                "label": "电机状态码 motorstate",
+                                                                "value": "motorstate",
+                                                            },
                                                             {"label": "KP / KD", "value": "gains"},
                                                         ],
                                                     ),
@@ -188,7 +192,7 @@ def create_app(catalog: Catalog) -> Dash:
             else "日志未携带 joint/motor 映射; 为避免误导, 仅显示状态实际值, KP/KD 仍按电机索引显示。"
         )
         meta = (
-            f"{data.info.path} · schema v1 · {len(data.info.chunk_paths)} 个分块 · "
+            f"{data.info.path} · schema v{data.info.schema_version} · {len(data.info.chunk_paths)} 个分块 · "
             f"{data.info.num_joints} joints / {data.info.num_motors} motors"
         )
         return (
@@ -336,6 +340,15 @@ def make_joint_figure(data: SessionData, signal: str, joints: list[int]) -> go.F
                 "tau_est",
                 "tau_ff",
             ),
+            "motorstate": (
+                "state_motorstate",
+                None,
+                "电机状态码 motorstate",
+                "状态码",
+                "state_motorstate_present",
+                "motorstate",
+                None,
+            ),
         }
         state_field, command_field, title, unit, present_field, actual_label, target_label = definitions.get(
             signal, definitions["position"]
@@ -343,6 +356,8 @@ def make_joint_figure(data: SessionData, signal: str, joints: list[int]) -> go.F
         state_valid = arrays["state_valid"].copy()
         if present_field is not None:
             state_valid &= arrays[present_field]
+        if signal == "motorstate" and not np.any(state_valid):
+            return _empty_figure("当前日志未记录 motorstate")
         for series_index, index in enumerate(selected):
             color = TRACE_COLORS[series_index % len(TRACE_COLORS)]
             actual = arrays[state_field][:, index].astype(np.float64).copy()
@@ -354,10 +369,10 @@ def make_joint_figure(data: SessionData, signal: str, joints: list[int]) -> go.F
                     y=y,
                     mode="lines",
                     name=f"{names[index]} · {actual_label}",
-                    line={"color": color},
+                    line={"color": color, "shape": "hv" if signal == "motorstate" else "linear"},
                 )
             )
-            if _can_overlay_state_and_command(data.info):
+            if command_field is not None and target_label is not None and _can_overlay_state_and_command(data.info):
                 x, y = decimate_series(
                     command_time,
                     arrays[command_field][:, index],
@@ -376,6 +391,8 @@ def make_joint_figure(data: SessionData, signal: str, joints: list[int]) -> go.F
     figure.update_layout(title=title)
     figure.update_xaxes(title_text="相对时间 (s)")
     figure.update_yaxes(title_text=unit)
+    if signal == "motorstate":
+        figure.update_yaxes(tickformat="d")
     return _style_figure(figure, height=620)
 
 

@@ -7,10 +7,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .control import PolicyInput, input_parameters
-from .GuardConfig import GuardConfig, WaistLocomotionGuardConfig
+from .GuardConfig import GuardConfig, UfoGuardConfig, WaistLocomotionGuardConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
-from .task import HoldPositionTaskConfig, SonicTaskConfig, TaskConfig, WaistLocomotionTaskConfig
+from .task import HoldPositionTaskConfig, SonicTaskConfig, TaskConfig, UfoTaskConfig, WaistLocomotionTaskConfig
 
 PolicyType = Literal["full_body", "lower_body", "upper_body"]
 
@@ -60,21 +60,30 @@ class PolicySpec(StrictModel):
     type: PolicyType = "full_body"
     inputs: tuple[PolicyInput, ...] = ()
     observation: ObservationConfig
-    task: TaskConfig | SonicTaskConfig | WaistLocomotionTaskConfig | HoldPositionTaskConfig
-    guard: GuardConfig | WaistLocomotionGuardConfig | None = None
+    task: TaskConfig | SonicTaskConfig | WaistLocomotionTaskConfig | HoldPositionTaskConfig | UfoTaskConfig
+    guard: GuardConfig | WaistLocomotionGuardConfig | UfoGuardConfig | None = None
 
     @model_validator(mode="before")
     @classmethod
-    def select_task_type(cls, value):
+    def select_config_types(cls, value):
         if not isinstance(value, dict) or not isinstance(value.get("task"), dict):
             return value
         task_types = {
             "hold_position": HoldPositionTaskConfig,
             "sonic": SonicTaskConfig,
+            "ufo": UfoTaskConfig,
             "waist_locomotion": WaistLocomotionTaskConfig,
         }
-        task_type = task_types.get(value.get("implementation"), TaskConfig)
-        return {**value, "task": task_type(**value["task"])}
+        implementation = value.get("implementation")
+        task_type = task_types.get(implementation, TaskConfig)
+        selected = {**value, "task": task_type(**value["task"])}
+        guard_types = {
+            "ufo": UfoGuardConfig,
+            "waist_locomotion": WaistLocomotionGuardConfig,
+        }
+        if isinstance(value.get("guard"), dict) and implementation in guard_types:
+            selected["guard"] = guard_types[implementation](**value["guard"])
+        return selected
 
     @field_validator("name", "implementation")
     @classmethod
