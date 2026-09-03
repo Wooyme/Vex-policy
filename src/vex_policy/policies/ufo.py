@@ -13,7 +13,6 @@ from loguru import logger
 from vex_policy.config.config_types import (
     InferenceConfig,
     UfoGoalContextConfig,
-    UfoGuardConfig,
     UfoRewardContextConfig,
     UfoTaskConfig,
     UfoTrackingContextConfig,
@@ -21,8 +20,10 @@ from vex_policy.config.config_types import (
 from vex_policy.policies.base import BasePolicy, PolicyJointCommand, PolicyRuntimeFault
 from vex_policy.policies.guard.ufo import UfoGuard
 from vex_policy.policies.sonic_planner import ort_providers
+from vex_policy.robots import G1_JOINT_LOWER, G1_JOINT_UPPER, G1_JOINT_VELOCITY
 from vex_policy.robots.g1 import DOF_NAMES
 from vex_policy.sdk.base.base_interface import LowState
+from vex_policy.utils.joint_interpolation import JointPositionInterpolator, limit_joint_position_target
 from vex_policy.utils.math.quat import quat_rotate_inverse
 
 _SESSION_CACHE: dict[tuple[str, tuple[str, ...]], onnxruntime.InferenceSession] = {}
@@ -192,108 +193,6 @@ _KD = np.asarray(
     ),
     dtype=np.float64,
 )
-_JOINT_LOWER = np.asarray(
-    (
-        -2.5307,
-        -0.5236,
-        -2.7576,
-        -0.0873,
-        -0.8727,
-        -0.2618,
-        -2.5307,
-        -2.9671,
-        -2.7576,
-        -0.0873,
-        -0.8727,
-        -0.2618,
-        -2.618,
-        -0.52,
-        -0.52,
-        -3.0892,
-        -1.5882,
-        -2.618,
-        -1.0472,
-        -1.9722,
-        -1.6144,
-        -1.6144,
-        -3.0892,
-        -2.2515,
-        -2.618,
-        -1.0472,
-        -1.9722,
-        -1.6144,
-        -1.6144,
-    ),
-    dtype=np.float64,
-)
-_JOINT_UPPER = np.asarray(
-    (
-        2.8798,
-        2.9671,
-        2.7576,
-        2.8798,
-        0.5236,
-        0.2618,
-        2.8798,
-        0.5236,
-        2.7576,
-        2.8798,
-        0.5236,
-        0.2618,
-        2.618,
-        0.52,
-        0.52,
-        2.6704,
-        2.2515,
-        2.618,
-        2.0944,
-        1.9722,
-        1.6144,
-        1.6144,
-        2.6704,
-        1.5882,
-        2.618,
-        2.0944,
-        1.9722,
-        1.6144,
-        1.6144,
-    ),
-    dtype=np.float64,
-)
-_JOINT_VELOCITY = np.asarray(
-    (
-        32.0,
-        32.0,
-        32.0,
-        20.0,
-        37.0,
-        37.0,
-        32.0,
-        32.0,
-        32.0,
-        20.0,
-        37.0,
-        37.0,
-        32.0,
-        37.0,
-        37.0,
-        37.0,
-        37.0,
-        37.0,
-        37.0,
-        37.0,
-        22.0,
-        22.0,
-        37.0,
-        37.0,
-        37.0,
-        37.0,
-        37.0,
-        22.0,
-        22.0,
-    ),
-    dtype=np.float64,
-)
 
 
 def _shared_session(path: str, provider: str) -> onnxruntime.InferenceSession:
@@ -372,8 +271,14 @@ class UfoPolicy(BasePolicy):
         self._last_cmd_q: np.ndarray | None = None
         self._activation_q: np.ndarray | None = None
         self._initializing = False
-        self._init_step = 0
-        self._init_steps = max(1, round(config.task.init_duration_s * self.rl_rate))
+        self._startup_interpolator = JointPositionInterpolator(
+            joint_lower=G1_JOINT_LOWER,
+            joint_upper=G1_JOINT_UPPER,
+            joint_velocity=G1_JOINT_VELOCITY,
+            rate_hz=self.rl_rate,
+            duration_s=config.task.init_duration_s,
+            slew_safety_factor=config.robot.joint_interpolation_slew_safety_factor,
+        )
         self._tracking_frame = 0
         self._tracking_playing = False
 
@@ -465,10 +370,10 @@ class UfoPolicy(BasePolicy):
         self._reset_history()
         self._activation_q = joint_pos.copy()
         self._last_cmd_q = None
-        self._init_step = 0
         if isinstance(self.ufo_task.context, UfoTrackingContextConfig):
             self._tracking_frame = self.ufo_task.context.start_frame
         if self.ufo_task.startup_mode == "prefill":
+            self._startup_interpolator.clear()
             try:
                 self._prefill_startup_history(robot_state, joint_pos)
             except PolicyRuntimeFault as error:
@@ -479,6 +384,13 @@ class UfoPolicy(BasePolicy):
             self._tracking_playing = isinstance(self.ufo_task.context, UfoTrackingContextConfig)
             self.logger.info("UFO observation history prefilled; policy action enabled")
         else:
+            try:
+                self._startup_interpolator.reset(joint_pos, _DEFAULT_DOF_ANGLES)
+            except ValueError as error:
+                self._activation_q = None
+                self._startup_interpolator.clear()
+                self._reset_history()
+                return f"ufo_start_failed: {error}"
             self._initializing = True
             self._tracking_playing = False
             self.logger.info(f"UFO initialization started ({self.ufo_task.init_duration_s:.1f}s)")
@@ -489,6 +401,7 @@ class UfoPolicy(BasePolicy):
         self._tracking_playing = False
         self._activation_q = None
         self._last_cmd_q = None
+        self._startup_interpolator.clear()
         self._reset_history()
 
     def apply_control(self, control: Mapping[str, float]) -> None:
@@ -596,11 +509,19 @@ class UfoPolicy(BasePolicy):
         return self.last_action.astype(np.float64) * _ACTION_SCALE + _DEFAULT_DOF_ANGLES
 
     def _slew_limit(self, q_target: np.ndarray, robot_state: LowState) -> np.ndarray:
-        baseline = self._last_cmd_q
-        if baseline is None:
-            baseline = np.asarray(robot_state.joint_pos[0], dtype=np.float64)
-        max_delta = _JOINT_VELOCITY * self.rl_dt * self.ufo_task.q_target_slew_safety_factor
-        return baseline + np.clip(q_target - baseline, -max_delta, max_delta)
+        try:
+            return limit_joint_position_target(
+                q_target,
+                current_q=robot_state.joint_pos[0],
+                previous_q=self._last_cmd_q,
+                joint_lower=G1_JOINT_LOWER,
+                joint_upper=G1_JOINT_UPPER,
+                joint_velocity=G1_JOINT_VELOCITY,
+                dt=self.rl_dt,
+                slew_safety_factor=self.ufo_task.q_target_slew_safety_factor,
+            )
+        except ValueError as error:
+            raise PolicyRuntimeFault(f"ufo_invalid_q_target: {error}") from error
 
     def step(self, robot_state: LowState) -> PolicyJointCommand:
         if self._activation_q is None:
@@ -613,24 +534,21 @@ class UfoPolicy(BasePolicy):
                 policy_target = self._infer(inputs)
             with self.latency_tracker.measure("postprocessing"):
                 if self._initializing:
-                    alpha = min((self._init_step + 1) / self._init_steps, 1.0)
-                    q_target = self._activation_q + (_DEFAULT_DOF_ANGLES - self._activation_q) * alpha
-                    self._init_step += 1
-                    if self._init_step >= self._init_steps:
+                    try:
+                        interpolation = self._startup_interpolator.next(robot_state.joint_pos[0])
+                    except (RuntimeError, ValueError) as error:
+                        raise PolicyRuntimeFault(f"ufo_interpolation_failed: {error}") from error
+                    q_target = interpolation.q_target
+                    if interpolation.complete:
                         self._initializing = False
                         if isinstance(self.ufo_task.context, UfoTrackingContextConfig):
                             self._tracking_frame = self.ufo_task.context.start_frame
                             self._tracking_playing = True
                         self.logger.info("UFO initialization complete; policy action enabled")
                 else:
-                    q_target = policy_target
+                    q_target = self._slew_limit(policy_target, robot_state)
                 if not np.isfinite(q_target).all():
                     raise PolicyRuntimeFault("ufo_non_finite_q_target")
-                q_target = np.clip(q_target, _JOINT_LOWER, _JOINT_UPPER)
-                q_target = self._slew_limit(q_target, robot_state)
-                q_target = np.clip(q_target, _JOINT_LOWER, _JOINT_UPPER)
-                if not np.isfinite(q_target).all():
-                    raise PolicyRuntimeFault("ufo_non_finite_q_target_after_slew")
                 self._last_cmd_q = q_target.copy()
             return PolicyJointCommand(
                 q=q_target,

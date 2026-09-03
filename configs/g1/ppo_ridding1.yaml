@@ -3,9 +3,9 @@ implementation: waist_locomotion
 type: full_body
 inputs:
   - type: slider
-    parameter: { name: amplitude, min: 0.05, max: 0.20, default: 0.125 }
+    parameter: { name: amplitude, min: 0.05, max: 0.20, default: 0.07 }
   - type: slider
-    parameter: { name: frequency, min: 0.2, max: 2.0, default: 1.1 }
+    parameter: { name: frequency, min: 0.2, max: 2.0, default: 1.0 }
   - type: slider
     parameter: { name: x, min: -1.0, max: 1.0, default: 1.0 }
   - type: slider
@@ -13,7 +13,7 @@ inputs:
   - type: slider
     parameter: { name: z, min: -1.0, max: 1.0, default: 0.0 }
   - type: slider
-    parameter: { name: height_delta, min: -0.1, max: 0.1, default: 0.0 }
+    parameter: { name: height_delta, min: -0.1, max: 0.1, default: -0.05 }
 observation:
   obs_dict:
     actor_obs:

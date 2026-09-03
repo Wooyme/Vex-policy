@@ -10,7 +10,14 @@ from .control import PolicyInput, input_parameters
 from .GuardConfig import GuardConfig, UfoGuardConfig, WaistLocomotionGuardConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
-from .task import HoldPositionTaskConfig, SonicTaskConfig, TaskConfig, UfoTaskConfig, WaistLocomotionTaskConfig
+from .task import (
+    HoldPositionTaskConfig,
+    SonicTaskConfig,
+    TaskConfig,
+    UfoTaskConfig,
+    WaistLocomotionTaskConfig,
+    WbtTaskConfig,
+)
 
 PolicyType = Literal["full_body", "lower_body", "upper_body"]
 
@@ -60,7 +67,14 @@ class PolicySpec(StrictModel):
     type: PolicyType = "full_body"
     inputs: tuple[PolicyInput, ...] = ()
     observation: ObservationConfig
-    task: TaskConfig | SonicTaskConfig | WaistLocomotionTaskConfig | HoldPositionTaskConfig | UfoTaskConfig
+    task: (
+        TaskConfig
+        | WbtTaskConfig
+        | SonicTaskConfig
+        | WaistLocomotionTaskConfig
+        | HoldPositionTaskConfig
+        | UfoTaskConfig
+    )
     guard: GuardConfig | WaistLocomotionGuardConfig | UfoGuardConfig | None = None
 
     @model_validator(mode="before")
@@ -73,6 +87,7 @@ class PolicySpec(StrictModel):
             "sonic": SonicTaskConfig,
             "ufo": UfoTaskConfig,
             "waist_locomotion": WaistLocomotionTaskConfig,
+            "wbt": WbtTaskConfig,
         }
         implementation = value.get("implementation")
         task_type = task_types.get(implementation, TaskConfig)

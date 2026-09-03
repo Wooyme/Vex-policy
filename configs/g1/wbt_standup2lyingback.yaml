@@ -46,6 +46,8 @@ task:
   desired_base_height: 0.75
   residual_upper_body_action: false
   print_observations: false
+  startup_mode: immediate
+  init_duration_s: 10.0
   motion_start_timestep: 0
   motion_end_timestep: 178
   motion_loop: false
@@ -53,4 +55,3 @@ task:
     force_upright_imu: false
     force_zero_angular_velocity: false
     force_zero_action: false
-

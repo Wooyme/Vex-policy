@@ -8,7 +8,14 @@ from .control import PolicyInput
 from .GuardConfig import GuardConfig, UfoGuardConfig, WaistLocomotionGuardConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
-from .task import HoldPositionTaskConfig, SonicTaskConfig, TaskConfig, UfoTaskConfig, WaistLocomotionTaskConfig
+from .task import (
+    HoldPositionTaskConfig,
+    SonicTaskConfig,
+    TaskConfig,
+    UfoTaskConfig,
+    WaistLocomotionTaskConfig,
+    WbtTaskConfig,
+)
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
@@ -16,6 +23,13 @@ class InferenceConfig:
     robot: RobotConfig
     inputs: tuple[PolicyInput, ...]
     observation: ObservationConfig
-    task: TaskConfig | SonicTaskConfig | WaistLocomotionTaskConfig | HoldPositionTaskConfig | UfoTaskConfig
+    task: (
+        TaskConfig
+        | WbtTaskConfig
+        | SonicTaskConfig
+        | WaistLocomotionTaskConfig
+        | HoldPositionTaskConfig
+        | UfoTaskConfig
+    )
     guard: GuardConfig | WaistLocomotionGuardConfig | UfoGuardConfig | None = None
     action_mask: ActionMaskConfig | None = None

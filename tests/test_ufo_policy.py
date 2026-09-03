@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import joblib
@@ -9,7 +10,7 @@ import pytest
 from vex_policy.config.config_types import InferenceConfig, PolicySpec
 from vex_policy.policies import ufo
 from vex_policy.policies.base import PolicyRuntimeFault
-from vex_policy.robots import G1_29DOF
+from vex_policy.robots import G1_29DOF, G1_JOINT_LOWER, G1_JOINT_UPPER, G1_JOINT_VELOCITY
 from vex_policy.sdk.base.base_interface import LowState
 
 
@@ -56,6 +57,7 @@ def _config(
     init_duration_s: float = 0.02,
     slew_factor: float = 100.0,
     startup_mode: str = "interpolate",
+    interpolation_slew_factor: float = 0.5,
 ) -> InferenceConfig:
     spec = PolicySpec.model_validate(
         {
@@ -78,7 +80,7 @@ def _config(
         }
     )
     return InferenceConfig(
-        robot=G1_29DOF,
+        robot=replace(G1_29DOF, joint_interpolation_slew_safety_factor=interpolation_slew_factor),
         inputs=spec.inputs,
         observation=spec.observation,
         task=spec.task,
@@ -117,7 +119,7 @@ def test_ufo_observation_history_and_action_contract(tmp_path, monkeypatch):
     np.testing.assert_allclose(session.feeds[1][0, 93:122], 5.0)
     np.testing.assert_allclose(session.feeds[1][0, 122:209], 0.0)
     np.testing.assert_allclose(initialization_command.q, ufo._DEFAULT_DOF_ANGLES)
-    expected = np.clip(ufo._DEFAULT_DOF_ANGLES + 5.0 * ufo._ACTION_SCALE, ufo._JOINT_LOWER, ufo._JOINT_UPPER)
+    expected = np.clip(ufo._DEFAULT_DOF_ANGLES + 5.0 * ufo._ACTION_SCALE, G1_JOINT_LOWER, G1_JOINT_UPPER)
     np.testing.assert_allclose(policy_command.q, expected)
     np.testing.assert_allclose(policy_command.kp, ufo._KP)
     np.testing.assert_allclose(policy_command.kd, ufo._KD)
@@ -152,6 +154,27 @@ def test_tracking_plays_once_then_uses_stop_frame(tmp_path, monkeypatch):
     np.testing.assert_allclose(session.feeds[1][0, 465:], context[1])
     np.testing.assert_allclose(session.feeds[2][0, 465:], context[2])
     np.testing.assert_allclose(session.feeds[3][0, 465:], context[0])
+
+
+def test_ufo_startup_uses_robot_interpolation_slew_factor(tmp_path, monkeypatch):
+    context_path = tmp_path / "goal.pkl"
+    joblib.dump({"stand": np.zeros((1, 256), dtype=np.float32)}, context_path)
+    monkeypatch.setattr(ufo, "_shared_session", lambda path, provider: _FakeSession())
+    policy = ufo.UfoPolicy(
+        _config(
+            {"type": "goal", "path": str(context_path), "name": "stand"},
+            interpolation_slew_factor=0.01,
+        )
+    )
+    startup_q = ufo._DEFAULT_DOF_ANGLES.copy()
+    startup_q[0] += 0.1
+    state = _state(startup_q)
+
+    assert policy.activate(state) is None
+    command = policy.step(state)
+
+    expected_delta = G1_JOINT_VELOCITY[0] / policy.rl_rate * 0.01
+    assert command.q[0] == pytest.approx(startup_q[0] - expected_delta)
 
 
 def test_non_finite_ufo_action_becomes_runtime_fault(tmp_path, monkeypatch):

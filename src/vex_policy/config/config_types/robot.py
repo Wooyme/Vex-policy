@@ -5,7 +5,7 @@ from __future__ import annotations
 import typing
 from typing import Any
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
 
 from vex_policy.sdk.high_frequency_logger import HighFrequencyLogConfig
@@ -122,6 +122,9 @@ class RobotConfig:
 
     default_per_joint_action_scale: tuple[float, ...] | None = None
     """Fallback per-joint action scales used when ONNX metadata is missing."""
+
+    joint_interpolation_slew_safety_factor: float = Field(default=0.5, gt=0.0, le=1.0, allow_inf_nan=False)
+    """Fraction of hardware joint velocity limits used by startup interpolation."""
 
     # =========================================================================
     # WBT Stiff Startup Configuration (OPTIONAL - for WBT policies)

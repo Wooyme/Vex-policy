@@ -134,6 +134,13 @@ uv run vex-policy \
 
 `motion_data_path` 可以指向一个动作目录，也可以指向包含多个动作子目录的集合；集合中有多个有效动作时需要填写 `motion_name`。每个动作目录包含带表头的 `joint_pos.csv`、`joint_vel.csv`、`body_pos.csv` 和 `body_quat.csv`，采样率为 50Hz，29 个关节列使用 IsaacLab/policy 顺序，根四元数使用 `wxyz`。`motion_loop: false` 会在动作末帧保持，设为 `true` 则循环播放。目录模式只加载 decoder 和 encoder，不校验也不创建 planner session。
 
+## WBT 启动模式
+
+WBT 的 `task.startup_mode` 支持 `interpolate`（默认）和 `immediate`。`interpolate` 会从激活瞬间的
+关节姿态出发，在 `task.init_duration_s`（默认 10 秒）内线性移动到 motion 首帧，完成后才开始推进
+motion timestep 和输出策略动作；插值目标同时受 G1 关节位置限制和逐周期速度限制保护，速度安全系数由
+机器人配置 `joint_interpolation_slew_safety_factor` 控制。`immediate` 保留直接启用策略动作的行为。
+
 ## UFO-Deploy
 
 `configs/examples/ufo/` 提供 UFO G1 发布策略的离线 tracking、reward 和 goal 示例。默认路径引用同级
@@ -147,7 +154,8 @@ uv run vex-policy --policy-config configs/examples/ufo --interface eth0
 每个 reward/goal YAML 固定选择一个命名 latent，通过 policy 名切换，不需要新的 MQTT 输入类型。reward
 使用不依赖 Torch 的 `reward_locomotion_numpy.pkl`。多个 UFO policy 共享同一路径/provider 的 ONNX session。
 
-选中 UFO policy 后会先用其发布 KP/KD 和目标限速，在 10 秒内插值到 UFO 默认站姿；推理同时运行以预热
+选中 UFO policy 后会先用其发布 KP/KD，并通过与 WBT 共用的 G1 关节插值器在 10 秒内移动到 UFO
+默认站姿；推理同时运行以预热
 4 帧历史，完成后才推进 tracking。tracking 播放到 `end_frame` 后固定使用 `stop_frame` latent。状态、context、
 推理动作或最终目标出现非法值时，本周期不会写命令且服务进入全局 `latched`；需先发送非急停空 policy，
 再重新选择。UFO context 使用 pickle/joblib 格式，只应加载可信发布物。本集成不包含实时 ZMQ/PICO teleop

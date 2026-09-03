@@ -213,6 +213,7 @@ G1_29DOF = RobotConfig(
     motor_kp=None,
     motor_kd=None,
     default_per_joint_action_scale=DEFAULT_PER_JOINT_ACTION_SCALE,
+    joint_interpolation_slew_safety_factor=0.5,
     stiff_startup_pos=DEFAULT_DOF_ANGLES,
     stiff_startup_kp=STIFF_STARTUP_KP,
     stiff_startup_kd=STIFF_STARTUP_KD,

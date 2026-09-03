@@ -16,7 +16,9 @@ through `end_frame` and holds the latent at `stop_frame`.
 Set `task.startup_mode: prefill` to skip interpolation. The startup state and
 its equivalent residual action fill all four history frames immediately.
 `startup_mode` only accepts `prefill` and `interpolate`; `init_duration_s` only
-applies to `interpolate`.
+applies to `interpolate`. Startup interpolation uses the robot-level
+`joint_interpolation_slew_safety_factor`; `task.q_target_slew_safety_factor`
+continues to limit normal policy targets after startup.
 
 The independent top-level `guard` checks that the robot is upright and close
 to UFO's default pose before either startup mode runs. Its

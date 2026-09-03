@@ -10,11 +10,13 @@ from loguru import logger
 from termcolor import colored
 
 from vex_policy.config.config_types.inference import InferenceConfig
-from vex_policy.policies.base import BasePolicy
+from vex_policy.policies.base import BasePolicy, PolicyRuntimeFault
 from vex_policy.policies.guard.wbt import WbtGuard
 from vex_policy.policies.wbt_utils import MotionClockUtil, NpzTargetSource, PinocchioRobot, TimestepUtil
+from vex_policy.robots import G1_JOINT_LOWER, G1_JOINT_UPPER, G1_JOINT_VELOCITY
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.clock import ClockSub
+from vex_policy.utils.joint_interpolation import JointPositionInterpolator
 from vex_policy.utils.math.quat import (
     matrix_from_quat,
     quat_mul,
@@ -40,6 +42,15 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.ref_quat_xyzw_t = None
         self.motion_command_0 = None
         self.ref_quat_xyzw_0 = None
+        self._activation_q: np.ndarray | None = None
+        self._startup_interpolator = JointPositionInterpolator(
+            joint_lower=G1_JOINT_LOWER,
+            joint_upper=G1_JOINT_UPPER,
+            joint_velocity=G1_JOINT_VELOCITY,
+            rate_hz=config.task.rl_rate,
+            duration_s=config.task.init_duration_s,
+            slew_safety_factor=config.robot.joint_interpolation_slew_safety_factor,
+        )
 
         # Initialize clock for sim-time synchronization
         self.clock_sub = ClockSub()
@@ -134,9 +145,11 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
     def setup_policy(self, model_path):
         if self.config.task.motion_data_path:
-            self._target_source = NpzTargetSource(self.config.task.motion_data_path,
-                                                  dof_names=self.dof_names,
-                                                  start_frame=self.config.task.motion_start_timestep)
+            self._target_source = NpzTargetSource(
+                self.config.task.motion_data_path,
+                dof_names=self.dof_names,
+                start_frame=self.config.task.motion_start_timestep,
+            )
         self.onnx_policy_session = onnxruntime.InferenceSession(model_path)
         self.onnx_input_names = [inp.name for inp in self.onnx_policy_session.get_inputs()]
         self.onnx_output_names = [out.name for out in self.onnx_policy_session.get_outputs()]
@@ -213,7 +226,6 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.robot_yaw_offset = 0.0
         self.motion_yaw_offset = 0.0
 
-
     def _on_policy_switched(self, model_path: str):
         super()._on_policy_switched(model_path)
         self.motion_clip_progressing = False
@@ -222,17 +234,25 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self._stiff_hold_active = True
         self.robot_yaw_offset = 0.0
         self.motion_yaw_offset = 0.0
+        self._startup_interpolator.clear()
         self._configure_action_scales()
 
     def get_init_target(self, robot_state_data: LowState):
         """Get initialization target joint positions."""
         dof_pos = robot_state_data.joint_pos
         if self.get_ready_state:
-            # Interpolate from current dof_pos to first pose in motion command
-            target_dof_pos = self.motion_command_0[:, : self.num_dofs]
-
-            q_target = dof_pos + (target_dof_pos - dof_pos) * (self.init_count / 500)
+            if self._activation_q is None:
+                raise PolicyRuntimeFault("wbt_startup_pose_unavailable")
+            try:
+                interpolation = self._startup_interpolator.next(dof_pos[0])
+            except (RuntimeError, ValueError) as error:
+                raise PolicyRuntimeFault(f"wbt_interpolation_failed: {error}") from error
+            q_target = interpolation.q_target.reshape(1, -1)
             self.init_count += 1
+            if interpolation.complete:
+                self._activation_q = None
+                self._handle_start_policy(robot_state_data)
+                self.logger.info("WBT initialization complete; policy action enabled")
             return q_target
         return dof_pos
 
@@ -386,6 +406,48 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self._capture_motion_yaw_offset(self.ref_quat_xyzw_0)
         self._handle_start_motion_clip()
 
+    def activate(self, robot_state_data: LowState) -> str | None:
+        """Start immediately or interpolate to the motion's first pose."""
+        if self.guard:
+            result, reason = self.guard.start_check(robot_state_data)
+            if not result:
+                return reason
+
+        self._init_phase_components()
+        for term_buffers in self.obs_history_buffers.values():
+            for buffer in term_buffers.values():
+                buffer.clear()
+        for observation in self.obs_buf_dict.values():
+            observation.fill(0.0)
+        self.motion_command_t = self.motion_command_0.copy()
+        self.ref_quat_xyzw_t = self.ref_quat_xyzw_0.copy()
+        self.last_policy_action.fill(0.0)
+        self.scaled_policy_action.fill(0.0)
+
+        if self.config.task.startup_mode == "immediate":
+            self._activation_q = None
+            self._startup_interpolator.clear()
+            self._handle_start_policy(robot_state_data)
+            self.logger.info("WBT immediate startup; policy action enabled")
+        else:
+            self._activation_q = np.asarray(robot_state_data.joint_pos[0], dtype=np.float64).copy()
+            try:
+                self._startup_interpolator.reset(
+                    self._activation_q,
+                    np.asarray(self.motion_command_0[0, : self.num_dofs], dtype=np.float64),
+                )
+            except ValueError as error:
+                self._activation_q = None
+                self._startup_interpolator.clear()
+                return f"wbt_start_failed: {error}"
+            self.use_policy_action = True
+            self.get_ready_state = True
+            self.init_count = 0
+            self._stiff_hold_active = False
+            self.motion_clip_progressing = False
+            self.logger.info(f"WBT initialization started ({self.config.task.init_duration_s:.1f}s)")
+        return None
+
     def _set_motion_timestep(self):
         if self.motion_clip_progressing:
             prev = self.curr_motion_timestep
@@ -423,6 +485,8 @@ class WholeBodyTrackingPolicy(BasePolicy):
         # self.motion_command_t = self.motion_command_0.copy()
         self.robot_yaw_offset = 0.0
         self.motion_yaw_offset = 0.0
+        self._activation_q = None
+        self._startup_interpolator.clear()
 
     def close(self) -> None:
         self.clock_sub.close()

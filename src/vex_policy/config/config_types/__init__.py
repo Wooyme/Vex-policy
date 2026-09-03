@@ -24,6 +24,7 @@ from .task import (
     UfoTaskConfig,
     UfoTrackingContextConfig,
     WaistLocomotionTaskConfig,
+    WbtTaskConfig,
 )
 
 __all__ = [
@@ -53,5 +54,6 @@ __all__ = [
     "UfoTrackingContextConfig",
     "WaistLocomotionGuardConfig",
     "WaistLocomotionTaskConfig",
+    "WbtTaskConfig",
     "input_parameters",
 ]

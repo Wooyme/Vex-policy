@@ -16,12 +16,11 @@ from vex_policy.config.config_types import (
     RobotRuntimeConfig,
     RuntimeConfig,
     SonicTaskConfig,
-    UfoGuardConfig,
     UfoTaskConfig,
     WaistLocomotionGuardConfig,
     WaistLocomotionTaskConfig,
+    WbtTaskConfig,
 )
-from vex_policy.robots import G1_29DOF
 
 
 @dataclass(frozen=True)
@@ -43,6 +42,8 @@ def load_runtime_config(
     path: str | Path | None = None,
     mqtt_path: str | Path | None = None,
 ) -> tuple[RuntimeConfig, Path]:
+    from vex_policy.robots import G1_29DOF
+
     config_path = Path(path).expanduser().resolve() if path else default_config_path()
     if config_path.is_dir():
         policy_paths = tuple(sorted(config_path.glob("*.yaml")))
@@ -97,6 +98,8 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             raise ValueError(f"Policy {spec.name!r} requires WaistLocomotionTaskConfig")
         elif spec.implementation == "waist_locomotion" and not isinstance(spec.guard, WaistLocomotionGuardConfig):
             raise ValueError(f"Policy {spec.name!r} requires WaistLocomotionGuardConfig")
+        elif spec.implementation == "wbt" and not isinstance(spec.task, WbtTaskConfig):
+            raise ValueError(f"Policy {spec.name!r} requires WbtTaskConfig")
         elif spec.implementation == "ufo":
             if not isinstance(spec.task, UfoTaskConfig):
                 raise ValueError(f"Policy {spec.name!r} requires UfoTaskConfig")

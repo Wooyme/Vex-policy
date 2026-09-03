@@ -52,6 +52,14 @@ class TaskConfig:
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class WbtTaskConfig(TaskConfig):
+    """Whole-body tracking startup and motion configuration."""
+
+    startup_mode: Literal["interpolate", "immediate"] = "interpolate"
+    init_duration_s: float = Field(default=10.0, gt=0.0, allow_inf_nan=False)
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class SonicTaskConfig(TaskConfig):
     """GEAR-SONIC decoder, encoder, planner, and timing configuration."""
 
