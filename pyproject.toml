@@ -81,4 +81,4 @@ testpaths = ["tests"]
 timeout = 20
 
 [tool.uv.sources]
-far-unitree-sdk = { path = "../../unitree_sdk2/wheelhouse/far_unitree_sdk-0.1.7-cp311-cp311-manylinux_2_39_x86_64.whl" }
+far-unitree-sdk = { path = "third_party/far_unitree_sdk-0.1.7-cp311-cp311-manylinux_2_39_x86_64.whl" }

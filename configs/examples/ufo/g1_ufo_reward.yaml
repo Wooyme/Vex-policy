@@ -39,16 +39,16 @@ observation:
     projected_gravity_history: 1.0
   history_length_dict: {actor_obs: 1}
 task:
-  model_path: ../../UFO/model/g1_policy/exported/FBcprAuxModel.onnx
+  model_path: models/ufo/FBcprAuxModel.onnx
   context:
     type: reward
-    path: ../../UFO/model/g1_policy/reward_inference_mjlab/reward_locomotion_numpy.pkl
-    name: move-ego-low0.5-0-0
+    path: models/ufo/reward_locomotion_numpy.pkl
+    name: move-ego-0-0
     z_id: 0
   action_mask_path: null
   rl_rate: 50.0
   inference_provider: cpu
-  startup_mode: interpolate
+  startup_mode: prefill
   init_duration_s: 10.0
   q_target_slew_safety_factor: 0.5
   print_observations: false
@@ -56,6 +56,3 @@ task:
     force_upright_imu: false
     force_zero_angular_velocity: false
     force_zero_action: false
-guard:
-  startup_joint_tolerance_rad: 0.2
-  startup_gravity_tolerance: 0.2

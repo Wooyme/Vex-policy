@@ -40,11 +40,11 @@ observation:
   history_length_dict: {actor_obs: 1}
 task:
   startup_mode: prefill
-  model_path: ../../UFO/model/g1_policy/exported/FBcprAuxModel.onnx
+  model_path: models/ufo/FBcprAuxModel.onnx
   context:
     type: goal
-    path: ../../UFO/model/g1_policy/goal_inference_mjlab/goal_reaching.pkl
-    name: walk3_subject3_9044
+    path: models/ufo/goal_reaching.pkl
+    name: walk2_subject1_2588
   action_mask_path: null
   rl_rate: 50.0
   inference_provider: cpu

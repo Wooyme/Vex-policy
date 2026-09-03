@@ -404,8 +404,8 @@ class WholeBodyTrackingPolicy(BasePolicy):
                     self.curr_motion_timestep = self.config.task.motion_start_timestep
                     self.logger.info(colored(f"Loop=True, set to {self.curr_motion_timestep}", "green"))
                 else:
-                    self.logger.info(colored(f"Reached end timestep {end}, stopping motion clip", "yellow"))
-                    self.motion_clip_progressing = False
+                    self.logger.info(colored(f"Reached end timestep {end}, keeping last clip", "yellow"))
+                    # self.motion_clip_progressing = False
                     self.curr_motion_timestep = end
 
     def _handle_stop_policy(self):
