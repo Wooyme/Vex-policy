@@ -65,7 +65,6 @@ DOF_NAMES = (
     "right_wrist_pitch_joint",
     "right_wrist_yaw_joint",
 )
-
 UPPER_BODY_DOF_NAMES = DOF_NAMES[15:]
 LOWER_BODY_DOF_NAMES = (
     "left_hip_yaw_joint",

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
 
 import joblib
 import numpy as np
 import onnxruntime
+import yaml
 from loguru import logger
 
 from vex_policy.config.config_types import (
@@ -53,146 +57,88 @@ _OBS_DIMS = {
     "dof_vel_history": 116,
     "projected_gravity_history": 12,
 }
-_ACTION_RESCALE = 5.0
 
-# These values are the policy contract from UFO-Deploy's G1 release, not Vex's
-# generic G1 standing configuration.
-_DEFAULT_DOF_ANGLES = np.asarray(
-    (
-        -0.1,
-        0.0,
-        0.0,
-        0.3,
-        -0.2,
-        0.0,
-        -0.1,
-        0.0,
-        0.0,
-        0.3,
-        -0.2,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-    ),
-    dtype=np.float64,
-)
-_ACTION_SCALE = np.asarray(
-    (
-        0.35066146,
-        0.35066146,
-        0.54754644,
-        0.35066146,
-        0.43857726,
-        0.43857726,
-        0.35066146,
-        0.35066146,
-        0.54754644,
-        0.35066146,
-        0.43857726,
-        0.43857726,
-        0.07333333,
-        0.04166667,
-        0.04166667,
-        0.43857741,
-        0.43857741,
-        0.43857741,
-        0.43857741,
-        0.43857741,
-        0.38903592,
-        0.38903592,
-        0.43857741,
-        0.43857741,
-        0.43857741,
-        0.43857741,
-        0.43857741,
-        0.38903592,
-        0.38903592,
-    ),
-    dtype=np.float64,
-)
-_KP = np.asarray(
-    (
-        99.09843,
-        99.0984,
-        40.1792,
-        99.0984,
-        28.5012,
-        28.5012,
-        99.09843,
-        99.0984,
-        40.1792,
-        99.0984,
-        28.5012,
-        28.5012,
-        300.0,
-        300.0,
-        300.0,
-        14.2506,
-        14.2506,
-        14.2506,
-        14.2506,
-        14.25062,
-        8.61103,
-        8.61103,
-        14.2506,
-        14.2506,
-        14.2506,
-        14.2506,
-        14.25062,
-        8.61103,
-        8.61103,
-    ),
-    dtype=np.float64,
-)
-_KD = np.asarray(
-    (
-        6.3088,
-        6.3088,
-        2.5579,
-        6.3088,
-        1.8145,
-        1.8145,
-        6.3088,
-        6.3088,
-        2.5579,
-        6.3088,
-        1.8145,
-        1.8145,
-        5.0,
-        5.0,
-        5.0,
-        0.9072,
-        0.9072,
-        0.9072,
-        0.9072,
-        0.9072,
-        0.5482,
-        0.5482,
-        0.9072,
-        0.9072,
-        0.9072,
-        0.9072,
-        0.9072,
-        0.5482,
-        0.5482,
-    ),
-    dtype=np.float64,
-)
+@dataclass(frozen=True)
+class _UfoModelConfig:
+    action_rescale: float
+    action_scale: np.ndarray
+    kp: np.ndarray
+    kd: np.ndarray
+    default_dof_angles: np.ndarray
+
+
+def _finite_float(value, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"UFO model config {label} must be a number")
+    result = float(value)
+    if not np.isfinite(result):
+        raise ValueError(f"UFO model config {label} must be finite")
+    return result
+
+
+def _joint_values(
+    value,
+    label: str,
+    dof_names: tuple[str, ...],
+    *,
+    default: float | None = None,
+    minimum: float | None = None,
+) -> np.ndarray:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"UFO model config {label} must be a mapping")
+    result = np.full(len(dof_names), np.nan if default is None else default, dtype=np.float64)
+    matched_by: list[str | None] = [None] * len(dof_names)
+    for pattern, raw_value in value.items():
+        if not isinstance(pattern, str):
+            raise ValueError(f"UFO model config {label} patterns must be strings")
+        try:
+            matcher = re.compile(pattern)
+        except re.error as error:
+            raise ValueError(f"UFO model config {label} has invalid pattern {pattern!r}: {error}") from error
+        indexes = [index for index, name in enumerate(dof_names) if matcher.fullmatch(name)]
+        if not indexes:
+            raise ValueError(f"UFO model config {label} pattern {pattern!r} matches no joints")
+        joint_value = _finite_float(raw_value, f"{label}[{pattern!r}]")
+        if minimum is not None and joint_value < minimum:
+            raise ValueError(f"UFO model config {label}[{pattern!r}] must be >= {minimum}")
+        for index in indexes:
+            if matched_by[index] is not None:
+                raise ValueError(
+                    f"UFO model config {label} patterns {matched_by[index]!r} and {pattern!r} "
+                    f"both match {dof_names[index]!r}"
+                )
+            result[index] = joint_value
+            matched_by[index] = pattern
+    missing = [name for index, name in enumerate(dof_names) if not np.isfinite(result[index])]
+    if missing:
+        raise ValueError(f"UFO model config {label} has no value for joints: {missing}")
+    return result
+
+
+def _load_model_config(path: str, dof_names: tuple[str, ...]) -> _UfoModelConfig:
+    config_path = Path(path).expanduser()
+    try:
+        with config_path.open(encoding="utf-8") as stream:
+            loaded = yaml.safe_load(stream)
+    except (OSError, yaml.YAMLError) as error:
+        raise ValueError(f"Failed to load UFO model config {config_path}: {error}") from error
+    if not isinstance(loaded, Mapping):
+        raise ValueError("UFO model config root must be a mapping")
+
+    required = {"action_rescale", "action_scale", "joint_kp", "joint_kd", "default_joint_pos"}
+    missing = sorted(required - loaded.keys())
+    if missing:
+        raise ValueError(f"UFO model config is missing fields: {missing}")
+    action_rescale = _finite_float(loaded["action_rescale"], "action_rescale")
+    if action_rescale <= 0.0:
+        raise ValueError("UFO model config action_rescale must be > 0")
+    return _UfoModelConfig(
+        action_rescale=action_rescale,
+        action_scale=_joint_values(loaded["action_scale"], "action_scale", dof_names, minimum=0.0),
+        kp=_joint_values(loaded["joint_kp"], "joint_kp", dof_names, minimum=0.0),
+        kd=_joint_values(loaded["joint_kd"], "joint_kd", dof_names, minimum=0.0),
+        default_dof_angles=_joint_values(loaded["default_joint_pos"], "default_joint_pos", dof_names, default=0.0),
+    )
 
 
 def _shared_session(path: str, provider: str) -> onnxruntime.InferenceSession:
@@ -240,7 +186,12 @@ class UfoPolicy(BasePolicy):
         self.ufo_task = config.task
         self.logger = logger
         self._init_robot_config(config.robot)
-        self.default_dof_angles = _DEFAULT_DOF_ANGLES.copy()
+        model_config = _load_model_config(config.task.model_config, DOF_NAMES)
+        self.action_rescale = model_config.action_rescale
+        self.action_scale = model_config.action_scale
+        self.kp = model_config.kp
+        self.kd = model_config.kd
+        self.default_dof_angles = model_config.default_dof_angles
         self.rl_rate = config.task.rl_rate
         self.rl_dt = 1.0 / self.rl_rate
         self.use_phase = False
@@ -352,9 +303,9 @@ class UfoPolicy(BasePolicy):
 
     def _prefill_startup_history(self, robot_state: LowState, joint_pos: np.ndarray) -> None:
         startup_action = np.clip(
-            (joint_pos - _DEFAULT_DOF_ANGLES) / _ACTION_SCALE,
-            -_ACTION_RESCALE,
-            _ACTION_RESCALE,
+            (joint_pos - self.default_dof_angles) / self.action_scale,
+            -self.action_rescale,
+            self.action_rescale,
         ).astype(np.float32)
         self.last_action = startup_action
         terms = self._observation_terms(robot_state)
@@ -385,7 +336,7 @@ class UfoPolicy(BasePolicy):
             self.logger.info("UFO observation history prefilled; policy action enabled")
         else:
             try:
-                self._startup_interpolator.reset(joint_pos, _DEFAULT_DOF_ANGLES)
+                self._startup_interpolator.reset(joint_pos, self.default_dof_angles)
             except ValueError as error:
                 self._activation_q = None
                 self._startup_interpolator.clear()
@@ -452,7 +403,7 @@ class UfoPolicy(BasePolicy):
             projected_gravity = np.asarray((0.0, 0.0, -1.0), dtype=np.float32)
         else:
             projected_gravity = self._projected_gravity(robot_state)
-        dof_pos_minus_default = joint_pos - _DEFAULT_DOF_ANGLES.astype(np.float32)
+        dof_pos_minus_default = joint_pos - self.default_dof_angles.astype(np.float32)
         current = {
             "prev_actions": self.last_action.copy(),
             "base_ang_vel": base_ang_vel,
@@ -505,8 +456,8 @@ class UfoPolicy(BasePolicy):
         action = np.clip(action, -1.0, 1.0)
         if self.ufo_task.debug.force_zero_action:
             action.fill(0.0)
-        self.last_action = (_ACTION_RESCALE * action[0]).astype(np.float32, copy=False)
-        return self.last_action.astype(np.float64) * _ACTION_SCALE + _DEFAULT_DOF_ANGLES
+        self.last_action = (self.action_rescale * action[0]).astype(np.float32, copy=False)
+        return self.last_action.astype(np.float64) * self.action_scale + self.default_dof_angles
 
     def _slew_limit(self, q_target: np.ndarray, robot_state: LowState) -> np.ndarray:
         try:
@@ -554,8 +505,8 @@ class UfoPolicy(BasePolicy):
                 q=q_target,
                 dq=np.zeros(29, dtype=np.float64),
                 tau=np.zeros(29, dtype=np.float64),
-                kp=_KP.copy(),
-                kd=_KD.copy(),
+                kp=self.kp.copy(),
+                kd=self.kd.copy(),
                 controlled_joints=self.controlled_joint_mask.copy(),
             )
         finally:

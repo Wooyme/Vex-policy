@@ -40,6 +40,7 @@ observation:
   history_length_dict: {actor_obs: 1}
 task:
   model_path: models/ufo/FBcprAuxModel.onnx
+  model_config: models/ufo/policy.yaml
   context:
     type: reward
     path: models/ufo/reward_locomotion_numpy.pkl

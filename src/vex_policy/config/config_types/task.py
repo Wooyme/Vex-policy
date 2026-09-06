@@ -154,6 +154,7 @@ class UfoTaskConfig:
     """UFO-Deploy G1 policy and latent-context configuration."""
 
     model_path: str
+    model_config: str
     context: UfoContextConfig
     action_mask_path: str | None = None
     rl_rate: float = Field(default=50.0, gt=0.0, allow_inf_nan=False)

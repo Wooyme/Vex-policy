@@ -40,6 +40,7 @@ observation:
   history_length_dict: {actor_obs: 1}
 task:
   model_path: ../../UFO/model/g1_policy/exported/FBcprAuxModel.onnx
+  model_config: models/ufo/policy.yaml
   context:
     type: goal
     path: ../../UFO/model/g1_policy/goal_inference_mjlab/goal_reaching.pkl

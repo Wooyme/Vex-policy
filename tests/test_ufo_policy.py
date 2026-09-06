@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import joblib
@@ -12,6 +13,9 @@ from vex_policy.policies import ufo
 from vex_policy.policies.base import PolicyRuntimeFault
 from vex_policy.robots import G1_29DOF, G1_JOINT_LOWER, G1_JOINT_UPPER, G1_JOINT_VELOCITY
 from vex_policy.sdk.base.base_interface import LowState
+
+_MODEL_CONFIG_PATH = Path(__file__).parents[1] / "models/ufo/policy.yaml"
+_MODEL_CONFIG = ufo._load_model_config(str(_MODEL_CONFIG_PATH), G1_29DOF.dof_names)
 
 
 class _FakeSession:
@@ -72,6 +76,7 @@ def _config(
             },
             "task": {
                 "model_path": "unused.onnx",
+                "model_config": str(_MODEL_CONFIG_PATH),
                 "context": context,
                 "startup_mode": startup_mode,
                 "init_duration_s": init_duration_s,
@@ -89,7 +94,7 @@ def _config(
 
 
 def _state(joint_pos: np.ndarray | None = None, base_quat: np.ndarray | None = None) -> LowState:
-    joint_pos = ufo._DEFAULT_DOF_ANGLES if joint_pos is None else np.asarray(joint_pos, dtype=np.float64)
+    joint_pos = _MODEL_CONFIG.default_dof_angles if joint_pos is None else np.asarray(joint_pos, dtype=np.float64)
     base_quat = np.asarray((1.0, 0.0, 0.0, 0.0)) if base_quat is None else np.asarray(base_quat, dtype=np.float64)
     return LowState(
         base_pos=np.zeros((1, 3)),
@@ -118,11 +123,15 @@ def test_ufo_observation_history_and_action_contract(tmp_path, monkeypatch):
     np.testing.assert_allclose(session.feeds[1][0, 64:93], 5.0)
     np.testing.assert_allclose(session.feeds[1][0, 93:122], 5.0)
     np.testing.assert_allclose(session.feeds[1][0, 122:209], 0.0)
-    np.testing.assert_allclose(initialization_command.q, ufo._DEFAULT_DOF_ANGLES)
-    expected = np.clip(ufo._DEFAULT_DOF_ANGLES + 5.0 * ufo._ACTION_SCALE, G1_JOINT_LOWER, G1_JOINT_UPPER)
+    np.testing.assert_allclose(initialization_command.q, policy.default_dof_angles)
+    expected = np.clip(
+        policy.default_dof_angles + policy.action_rescale * policy.action_scale,
+        G1_JOINT_LOWER,
+        G1_JOINT_UPPER,
+    )
     np.testing.assert_allclose(policy_command.q, expected)
-    np.testing.assert_allclose(policy_command.kp, ufo._KP)
-    np.testing.assert_allclose(policy_command.kd, ufo._KD)
+    np.testing.assert_allclose(policy_command.kp, policy.kp)
+    np.testing.assert_allclose(policy_command.kd, policy.kd)
 
 
 def test_tracking_plays_once_then_uses_stop_frame(tmp_path, monkeypatch):
@@ -166,7 +175,7 @@ def test_ufo_startup_uses_robot_interpolation_slew_factor(tmp_path, monkeypatch)
             interpolation_slew_factor=0.01,
         )
     )
-    startup_q = ufo._DEFAULT_DOF_ANGLES.copy()
+    startup_q = policy.default_dof_angles.copy()
     startup_q[0] += 0.1
     state = _state(startup_q)
 
@@ -211,7 +220,7 @@ def test_prefill_starts_immediately_with_actual_pose_history(tmp_path, monkeypat
         )
     )
     startup_action = np.full(29, 0.25, dtype=np.float64)
-    startup_q = ufo._DEFAULT_DOF_ANGLES + startup_action * ufo._ACTION_SCALE
+    startup_q = policy.default_dof_angles + startup_action * policy.action_scale
     state = _state(startup_q)
 
     assert policy.activate(state) is None
@@ -220,14 +229,14 @@ def test_prefill_starts_immediately_with_actual_pose_history(tmp_path, monkeypat
     assert not policy._initializing
     np.testing.assert_allclose(session.feeds[0][0, 64:93], startup_action)
     np.testing.assert_allclose(session.feeds[0][0, 93:209], np.tile(startup_action, 4))
-    np.testing.assert_allclose(command.q, ufo._DEFAULT_DOF_ANGLES)
+    np.testing.assert_allclose(command.q, policy.default_dof_angles)
 
 
 @pytest.mark.parametrize(
     ("state", "reason"),
     [
         (_state(np.zeros(29)), "left_knee_joint error=0.300rad"),
-        (_state(ufo._DEFAULT_DOF_ANGLES, np.asarray((0.0, 1.0, 0.0, 0.0))), "projected_gravity error=2.000"),
+        (_state(_MODEL_CONFIG.default_dof_angles, np.asarray((0.0, 1.0, 0.0, 0.0))), "projected_gravity error=2.000"),
     ],
 )
 @pytest.mark.parametrize("startup_mode", ["prefill", "interpolate"])

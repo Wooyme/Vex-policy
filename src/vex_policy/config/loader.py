@@ -107,6 +107,7 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
                 raise ValueError(f"UFO policy {spec.name!r} must be full_body")
             if spec.task.action_mask_path is not None:
                 raise ValueError(f"UFO policy {spec.name!r} does not support action masks")
+            path_fields.append("model_config")
         resolved_paths: dict[str, str] = {}
         for field_name in path_fields:
             model_path = getattr(spec.task, field_name, None)
