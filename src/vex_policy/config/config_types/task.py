@@ -24,6 +24,21 @@ class HoldPositionTaskConfig:
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class InterpolationTaskConfig:
+    """Model-free interpolation to one endpoint of a local motion NPZ."""
+
+    motion_data_path: str = Field(min_length=1)
+    duration_s: float = Field(gt=0.0, allow_inf_nan=False)
+    target_frame: Literal["first", "last"] = "first"
+    action_mask_path: str | None = None
+    rl_rate: float = Field(default=50.0, gt=0.0, allow_inf_nan=False)
+
+    def __post_init__(self) -> None:
+        if not self.motion_data_path.strip():
+            raise ValueError("motion_data_path must not be empty")
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class TaskConfig:
     """Parameters that affect one policy instance.
 

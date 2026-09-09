@@ -248,6 +248,27 @@ activate 使用当前状态机周期已经读取的共享 LowState，保存当�
 `action_mask_path` 与其他策略相同：被 mask 的关节不会写入组合命令，可交给同时运行的另一个身体区域策略。
 例如将 policy 设为 `lower_body` 并使用 `configs/g1/action_masks/disable_upper_body.yaml`，即可只保持下半身。
 
+## Interpolation
+
+`interpolation` 是不加载或运行神经网络的独立插值策略，完整示例见
+`configs/examples/g1_interpolation.yaml`。将 `task.motion_data_path` 指向本地 NPZ，填写必需的
+`duration_s`（期望插值秒数），并用 `target_frame: first` 或 `last` 选择第一帧或最后一帧，默认 `first`。
+动作路径相对进程当前工作目录解析；配置不需要 `model_path`，手动输入使用 `inputs: []`。
+
+NPZ 必须包含一维字符串数组 `joint_names` 和弧度单位的 `joint_pos`，后者支持 `(帧数, 关节数)` 或
+`(帧数, 7 + 关节数)`；带根姿态时跳过前 7 列 `[xyz,wxyz]`，按名称重排到硬件关节顺序。
+只读取所选端点作为固定目标，不播放中间帧，也不要求 `joint_vel` 或刚体姿态数组。
+
+每次激活从共享 LowState 捕获实际关节位置，按 `rl_rate` 周期线性推进，标称步数为
+`max(1, round(duration_s * rl_rate))`。目标包含机器人配置的校准偏移，并裁剪到 G1 关节位置限制；
+每周期位移受 G1 速度限制与 `robot.joint_interpolation_slew_safety_factor` 约束。
+期望时间不足时继续受限插值，直到输出位置命令到达裁剪后的目标，然后持续保持，实际到达时间可能更长。
+这不表示实际关节已经无误差地跟踪到目标。停用后清除进度，下次激活从新的实际姿态开始。
+
+KP/KD 优先使用 `motor_kp/motor_kd`，缺失时使用 `stiff_startup_kp/stiff_startup_kd`；
+目标速度与前馈力矩为零。`action_mask_path` 的路径和关节归属规则与保持策略相同，支持上下半身组合。
+该策略仍通过现有 MQTT 状态机激活、停用与接收心跳。
+
 ## MQTT 协议
 
 控制输入订阅 `robot/commands`（QoS 0），格式与 `../vex-panel/src/hooks/useMqttClient.ts` 一致：

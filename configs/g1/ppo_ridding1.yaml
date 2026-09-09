@@ -68,5 +68,5 @@ task:
     force_zero_angular_velocity: false
     force_zero_action: false
 guard:
-  startup_joint_tolerance_rad: 1
-  startup_gravity_tolerance: 1
+  startup_joint_tolerance_rad: 1.4
+  startup_gravity_tolerance: 1.4

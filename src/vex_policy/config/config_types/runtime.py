@@ -12,6 +12,7 @@ from .observation import ObservationConfig
 from .robot import RobotConfig
 from .task import (
     HoldPositionTaskConfig,
+    InterpolationTaskConfig,
     SonicTaskConfig,
     TaskConfig,
     UfoTaskConfig,
@@ -73,6 +74,7 @@ class PolicySpec(StrictModel):
         | SonicTaskConfig
         | WaistLocomotionTaskConfig
         | HoldPositionTaskConfig
+        | InterpolationTaskConfig
         | UfoTaskConfig
     )
     guard: GuardConfig | WaistLocomotionGuardConfig | UfoGuardConfig | None = None
@@ -84,6 +86,7 @@ class PolicySpec(StrictModel):
             return value
         task_types = {
             "hold_position": HoldPositionTaskConfig,
+            "interpolation": InterpolationTaskConfig,
             "sonic": SonicTaskConfig,
             "ufo": UfoTaskConfig,
             "waist_locomotion": WaistLocomotionTaskConfig,

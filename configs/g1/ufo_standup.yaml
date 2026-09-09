@@ -1,4 +1,4 @@
-name: g1-ufo-goal-walk3
+name: ufo-standup
 implementation: ufo
 type: full_body
 inputs: []
@@ -45,7 +45,7 @@ task:
   context:
     type: goal
     path: models/ufo/goal_reaching.pkl
-    name: fallAndGetUp1_subject4_2193
+    name: walk1_subject2_570
   action_mask_path: null
   rl_rate: 50.0
   inference_provider: cpu

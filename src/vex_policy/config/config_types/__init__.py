@@ -16,6 +16,7 @@ from .runtime import (
 from .task import (
     DebugConfig,
     HoldPositionTaskConfig,
+    InterpolationTaskConfig,
     SonicTaskConfig,
     TaskConfig,
     UfoContextConfig,
@@ -34,6 +35,7 @@ __all__ = [
     "HoldPositionTaskConfig",
     "InferenceConfig",
     "InputParameter",
+    "InterpolationTaskConfig",
     "JoystickInput",
     "MqttConfig",
     "ObservationConfig",

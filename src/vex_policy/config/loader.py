@@ -11,6 +11,7 @@ from vex_policy.config.config_types import (
     ActionMaskConfig,
     HoldPositionTaskConfig,
     InferenceConfig,
+    InterpolationTaskConfig,
     MqttConfig,
     PolicySpec,
     RobotRuntimeConfig,
@@ -85,9 +86,13 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
     resolved: list[ResolvedPolicy] = []
     rates: set[float] = set()
     for spec in runtime.policies:
-        path_fields = [] if spec.implementation == "hold_position" else ["model_path"]
+        path_fields = [] if spec.implementation in {"hold_position", "interpolation"} else ["model_path"]
         if spec.implementation == "hold_position" and not isinstance(spec.task, HoldPositionTaskConfig):
             raise ValueError(f"Policy {spec.name!r} requires HoldPositionTaskConfig")
+        if spec.implementation == "interpolation":
+            if not isinstance(spec.task, InterpolationTaskConfig):
+                raise ValueError(f"Policy {spec.name!r} requires InterpolationTaskConfig")
+            path_fields.append("motion_data_path")
         if spec.implementation == "sonic":
             if not isinstance(spec.task, SonicTaskConfig):
                 raise ValueError(f"Policy {spec.name!r} requires SonicTaskConfig")
@@ -118,6 +123,8 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             candidate = Path(model_path).expanduser().resolve()
             if not candidate.is_file():
                 raise ValueError(f"Policy {spec.name!r} model file does not exist: {candidate}")
+            if spec.implementation == "interpolation" and candidate.suffix.lower() != ".npz":
+                raise ValueError(f"Policy {spec.name!r} motion_data_path must reference an NPZ file")
             resolved_paths[field_name] = str(candidate)
         if isinstance(spec.task, UfoTaskConfig):
             context_path = spec.task.context.path

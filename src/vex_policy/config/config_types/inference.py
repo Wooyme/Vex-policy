@@ -10,6 +10,7 @@ from .observation import ObservationConfig
 from .robot import RobotConfig
 from .task import (
     HoldPositionTaskConfig,
+    InterpolationTaskConfig,
     SonicTaskConfig,
     TaskConfig,
     UfoTaskConfig,
@@ -29,6 +30,7 @@ class InferenceConfig:
         | SonicTaskConfig
         | WaistLocomotionTaskConfig
         | HoldPositionTaskConfig
+        | InterpolationTaskConfig
         | UfoTaskConfig
     )
     guard: GuardConfig | WaistLocomotionGuardConfig | UfoGuardConfig | None = None

@@ -1,0 +1,15 @@
+name: g1-interpolation
+implementation: interpolation
+type: full_body
+inputs: []
+observation:
+  obs_dict: {}
+  obs_dims: {}
+  obs_scales: {}
+  history_length_dict: {}
+task:
+  motion_data_path: motions/target.npz
+  target_frame: first # first or last
+  duration_s: 5.0
+  rl_rate: 50.0
+  action_mask_path: null
