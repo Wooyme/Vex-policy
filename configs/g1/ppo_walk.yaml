@@ -1,4 +1,4 @@
-name: g1-ppo-locomotion
+name: ppo-walk
 implementation: locomotion
 type: full_body
 inputs:

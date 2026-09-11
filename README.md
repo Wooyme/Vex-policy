@@ -211,7 +211,7 @@ Holosoma `waist_loco` 分支的 pelvis-sine 策略使用独立示例
 启动检查由独立的
 `WaistLocomotionGuard` 执行，其关节和重力误差阈值配置在 policy YAML 顶层的 `guard` 中。
 
-waist locomotion 将六个真实物理量分别声明为滑条：`amplitude` 范围 `[0.05,0.20]`、默认 `0.125`，
+105 维 pelvis-sine 分支将六个真实物理量分别声明为滑条：`amplitude` 范围 `[0.05,0.20]`、默认 `0.125`，
 `frequency` 范围 `[0.2,2.0]`、默认 `1.1`，方向 `x/y/z` 范围均为 `[-1,1]`、默认
 `[1,0,0]`，基座相对右脚踝高度增量 `height_delta` 范围为 `[-0.1,0.1]` 米、默认 `0`。方向在策略内归一化，
 全零方向回退到配置的默认方向。这些范围和默认值只在 `inputs` 中
@@ -221,6 +221,18 @@ MQTT 参数。`pelvis_orientation_error` 以每次策略成功启动时机器人
 姿态与 motion 中的根 quaternion 不一致；策略停用后再次启动会重新采样该参考姿态。命令中的目标高度差以
 启动瞬间的高度差加 `height_delta` 得到；当前高度差 observation 使用 ONNX 内嵌 URDF 对关节角做正运动学，
 并与 IMU 投影重力结合求出，因此部署时不依赖无法观测的基座或脚踝绝对世界高度。
+
+同一个 `implementation: waist_locomotion` 也支持 Holosoma `waist_loco0` 的
+`g1_29dof_loco_lite`（hip-pitch-sine）模型。加载时根据 ONNX 的 `actor_obs[1,105]` 或
+`actor_obs[1,102]` 自动选择分支，并调整命令 observation 的名称、维度和字母排序，无需额外的分支开关。
+102 维分支使用三个滑条：`amplitude` 为髋关节摆幅（**弧度**，训练范围 5°–20° 对应约
+`[0.0872664626,0.3490658504]`），`frequency` 为 Hz，`height_delta` 为米；不声明 `x/y/z`。
+其五维命令为 `[sin_phase, cos_phase, amplitude_rad, frequency_hz, target_height]`，按训练定义排在
+`dof_vel` 之后、`pelvis_orientation_error` 之前。输入滑条必须匹配检测到的分支，避免把旧模型的米制摆幅
+误用于新模型。两种分支均使用 NPZ 最后一帧关节作为残差零位；102 维分支的姿态误差以该帧根 quaternion
+为参考，105 维分支保留启动瞬间的实测参考。现有 `configs/g1/ppo_doggy0.yaml` 已对应本地的 102→29
+模型；独立示例见 `configs/examples/g1_waist_locomotion_lite.yaml`，可用
+`vex-policy --config configs/examples/g1_waist_locomotion_lite.yaml` 启动。
 
 ## Enhanced inputs
 
