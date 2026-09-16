@@ -20,6 +20,7 @@ from vex_policy.config.config_types import (
     input_parameters,
 )
 from vex_policy.policies.guard.waist_locomotion import WaistLocomotionGuard
+from vex_policy.robots import G1_JOINT_LOWER, G1_JOINT_UPPER
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.math.quat import quat_rotate_inverse
 
@@ -227,6 +228,18 @@ class WaistLocomotionPolicy(BasePolicy):
             for buffer in group_buffers.values():
                 buffer.clear()
         self.obs_buf_dict = {group: np.zeros_like(buffer) for group, buffer in self.obs_buf_dict.items()}
+
+    def rl_inference(self, robot_state_data: LowState) -> np.ndarray:
+        """Run inference and keep the resulting position target within joint limits."""
+
+        scaled_policy_action = super().rl_inference(robot_state_data)
+        q_target = np.clip(
+            self.default_dof_angles + scaled_policy_action,
+            G1_JOINT_LOWER,
+            G1_JOINT_UPPER,
+        )
+        self.scaled_policy_action = q_target - self.default_dof_angles
+        return self.scaled_policy_action
 
     def setup_policy(self, model_path) -> None:
         super().setup_policy(model_path)
