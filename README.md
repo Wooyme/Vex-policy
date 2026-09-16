@@ -327,6 +327,45 @@ Unitree 低层接口当前没有世界位置估计，所以真实状态中的 `b
 - 急停或超时解除后不会自动恢复；必须先发送非急停空 policy，再重新选择。
 - 选择变化时仅停止被移除的实例并初始化新增实例，未变化策略保留历史与相位；切换时跳过一个控制周期的应用层命令更新，SDK 仍可能重发上一条缓存命令。
 
+## Policy 生命周期与扩展
+
+所有策略直接继承 `BasePolicy`。基类只管理公共关节信息、控制范围、guard、生命周期和周期计时；
+不创建模型、观测历史、步态或启动插值。实例构造完成后处于 inactive，模型与静态动作数据在构造期间预加载。
+基类构造函数不调用子类初始化钩子，子类需显式调用 `super().__init__(config)`，然后创建自身组件。
+
+公共接口为 `activate(state)`、`apply_control(control)`、`step(state)`、`deactivate()`、`close()`，
+实现策略时覆盖以下钩子，保留公共接口的统一外壳：
+
+| 钩子 | 职责 |
+| --- | --- |
+| `_on_activate(state)` | 清空上一回合的动作、历史、相位与播放进度，恢复配置输入默认值，采样当前姿态并启动本回合任务；成功返回 `None`，预期拒绝返回原因字符串。 |
+| `_apply_control(control)` | 解释该策略的运行输入；无输入的策略可使用默认空实现。 |
+| `_compute_command(state)` | 必须实现；从共享 `LowState` 计算一条完整硬件关节顺序的 `PolicyJointCommand`，不读写硬件。 |
+| `_on_deactivate()` | 停止并等待后台任务，清理本回合状态；也必须能清理未完成的激活。 |
+| `_on_close()` | 释放实例资源；inactive 实例也会调用。 |
+
+`get_reference_state()` 仍为可选接口。`activate()` 在 guard 通过后进入激活钩子，钩子失败会回滚；
+`PolicyRuntimeFault` 表示应触发全局锁存的预期数据/推理故障，其余异常清理后继续抛出。
+运行中的重复 `activate()` 不重启；`deactivate()` 和 `close()` 可重复调用，closed 实例不可复用。
+inactive/closed 实例调用 `step()` 或 `apply_control()` 会报错。生命周期调用与本实例的单步计算串行化，
+后台任务不得反向调用公共生命周期接口。
+
+停用后再次激活统一开始新回合，包含 locomotion 的历史、动作、站立状态和相位重置。
+WBT 的初始化/跟踪、UFO 的插值/预填充、SONIC 的规划/播放仍由各策略自己管理。
+组合切换中未移除的策略继续当前回合。切换周期仍不计算命令，下一运行周期先应用最新 MQTT 输入再执行单步。
+
+公共组件按需组合：`ObservationHistory` 保持 PPO 模型的逐项排序、缩放、时间历史及零填充；
+`OnnxActor`、`load_metadata`、`resolve_control_gains` 提供模型支持；`PositionAction` 与
+`position_command` 处理动作和位置命令。SONIC/UFO 保留专属观测布局与动作顺序，共用按路径/provider
+缓存的 ONNX session；一个策略关闭时不会销毁其他策略正在使用的共享 session，缓存随进程结束释放。
+关节命令仍使用校准前约定，由状态机合成后统一添加偏移。
+
+模型与静态数据跨回合复用，SONIC planner 在停用时停止并等待当前推理结束，WBT 时钟订阅在关闭时释放。
+构造函数必须自行清理部分创建的资源；状态机会关闭批量预加载中已成功创建的实例。
+组合推理失败时先等待所有本周期任务结束，再清理并锁存，整个失败周期不发送命令。
+旧的 `_init_*` 初始化覆写、`_handle_start_policy`、`compute_joint_command` 和实例内多模型切换接口已移除，
+外部策略实现需迁移到上述钩子；YAML、MQTT 和策略注册名称保持兼容。
+
 ## 验证
 
 ```bash
@@ -336,5 +375,6 @@ uv build
 ```
 
 现有测试覆盖 SDK 日志分块/丢弃/错误隔离、BaseInterface 日志包装、InterfaceManager 单例、组合 policy
-每周期只读一次 LowState、上下肢并行计算，以及合成后只写一次命令；不包含真实机器人、真实 ONNX 推理或
+每周期只读一次 LowState、上下肢并行计算、合成后只写一次命令，以及各策略重启、激活回滚和资源清理；
+使用 fake ONNX 检查观测排列和命令数值，不包含真实机器人、真实 ONNX 推理或
 Mosquitto 集成测试。

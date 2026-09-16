@@ -110,7 +110,7 @@ def test_ufo_observation_history_and_action_contract(tmp_path, monkeypatch):
     context_path = tmp_path / "reward_numpy.pkl"
     joblib.dump({"forward": [np.full((1, 256), 2.0, dtype=np.float32)]}, context_path)
     session = _FakeSession(np.full((1, 29), 2.0, dtype=np.float32))
-    monkeypatch.setattr(ufo, "_shared_session", lambda path, provider: session)
+    monkeypatch.setattr(ufo, "shared_session", lambda path, provider: session)
     policy = ufo.UfoPolicy(_config({"type": "reward", "path": str(context_path), "name": "forward", "z_id": 0}))
 
     assert policy.activate(_state()) is None
@@ -141,7 +141,7 @@ def test_tracking_plays_once_then_uses_stop_frame(tmp_path, monkeypatch):
     context_path = tmp_path / "tracking.pkl"
     joblib.dump(context, context_path)
     session = _FakeSession()
-    monkeypatch.setattr(ufo, "_shared_session", lambda path, provider: session)
+    monkeypatch.setattr(ufo, "shared_session", lambda path, provider: session)
     policy = ufo.UfoPolicy(
         _config(
             {
@@ -168,7 +168,7 @@ def test_tracking_plays_once_then_uses_stop_frame(tmp_path, monkeypatch):
 def test_ufo_startup_uses_robot_interpolation_slew_factor(tmp_path, monkeypatch):
     context_path = tmp_path / "goal.pkl"
     joblib.dump({"stand": np.zeros((1, 256), dtype=np.float32)}, context_path)
-    monkeypatch.setattr(ufo, "_shared_session", lambda path, provider: _FakeSession())
+    monkeypatch.setattr(ufo, "shared_session", lambda path, provider: _FakeSession())
     policy = ufo.UfoPolicy(
         _config(
             {"type": "goal", "path": str(context_path), "name": "stand"},
@@ -191,7 +191,7 @@ def test_non_finite_ufo_action_becomes_runtime_fault(tmp_path, monkeypatch):
     joblib.dump({"stand": np.zeros((1, 256), dtype=np.float32)}, context_path)
     output = np.zeros((1, 29), dtype=np.float32)
     output[0, 0] = np.nan
-    monkeypatch.setattr(ufo, "_shared_session", lambda path, provider: _FakeSession(output))
+    monkeypatch.setattr(ufo, "shared_session", lambda path, provider: _FakeSession(output))
     policy = ufo.UfoPolicy(_config({"type": "goal", "path": str(context_path), "name": "stand"}))
 
     assert policy.activate(_state()) is None
@@ -202,7 +202,7 @@ def test_non_finite_ufo_action_becomes_runtime_fault(tmp_path, monkeypatch):
 def test_reward_context_rejects_missing_selection(tmp_path, monkeypatch):
     context_path = tmp_path / "reward.pkl"
     joblib.dump({"known": [np.zeros((1, 256), dtype=np.float32)]}, context_path)
-    monkeypatch.setattr(ufo, "_shared_session", lambda path, provider: _FakeSession())
+    monkeypatch.setattr(ufo, "shared_session", lambda path, provider: _FakeSession())
 
     with pytest.raises(ValueError, match="does not contain 'missing'"):
         ufo.UfoPolicy(_config({"type": "reward", "path": str(context_path), "name": "missing"}))
@@ -212,7 +212,7 @@ def test_prefill_starts_immediately_with_actual_pose_history(tmp_path, monkeypat
     context_path = tmp_path / "goal.pkl"
     joblib.dump({"stand": np.zeros((1, 256), dtype=np.float32)}, context_path)
     session = _FakeSession()
-    monkeypatch.setattr(ufo, "_shared_session", lambda path, provider: session)
+    monkeypatch.setattr(ufo, "shared_session", lambda path, provider: session)
     policy = ufo.UfoPolicy(
         _config(
             {"type": "goal", "path": str(context_path), "name": "stand"},
@@ -243,7 +243,7 @@ def test_prefill_starts_immediately_with_actual_pose_history(tmp_path, monkeypat
 def test_ufo_guard_rejects_unsafe_startup_pose(tmp_path, monkeypatch, state, reason, startup_mode):
     context_path = tmp_path / "goal.pkl"
     joblib.dump({"stand": np.zeros((1, 256), dtype=np.float32)}, context_path)
-    monkeypatch.setattr(ufo, "_shared_session", lambda path, provider: _FakeSession())
+    monkeypatch.setattr(ufo, "shared_session", lambda path, provider: _FakeSession())
     policy = ufo.UfoPolicy(
         _config(
             {"type": "goal", "path": str(context_path), "name": "stand"},
@@ -260,3 +260,32 @@ def test_ufo_startup_mode_rejects_old_guarded_prefill_name():
             {"type": "goal", "path": "unused.pkl", "name": "stand"},
             startup_mode="guarded_prefill",
         )
+
+
+@pytest.mark.parametrize("startup_mode", ["interpolate", "prefill"])
+def test_ufo_reactivation_restores_history_and_tracking_start(tmp_path, monkeypatch, startup_mode):
+    context_path = tmp_path / "restart_tracking.pkl"
+    context = np.eye(4, 256, dtype=np.float32)
+    joblib.dump(context, context_path)
+    session = _FakeSession(np.full((1, 29), 0.2, dtype=np.float32))
+    monkeypatch.setattr(ufo, "shared_session", lambda path, providers: session)
+    policy = ufo.UfoPolicy(
+        _config(
+            {"type": "tracking", "path": str(context_path), "start_frame": 1, "end_frame": 3, "window_size": 1},
+            startup_mode=startup_mode,
+        )
+    )
+    policy.activate(_state())
+    first_command = policy.step(_state())
+    first_observation = session.feeds[-1].copy()
+    for _ in range(4):
+        policy.step(_state())
+    policy.deactivate()
+    assert policy._activation_q is None
+    assert policy._last_cmd_q is None
+    assert policy.activate(_state()) is None
+    assert policy._tracking_frame == 1
+    command = policy.step(_state())
+    np.testing.assert_array_equal(session.feeds[-1], first_observation)
+    np.testing.assert_allclose(command.q, first_command.q)
+    policy.close()

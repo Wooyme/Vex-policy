@@ -8,11 +8,13 @@ from collections import deque
 from collections.abc import Mapping
 
 import numpy as np
-import onnxruntime
 from loguru import logger
 
 from vex_policy.config.config_types import InferenceConfig, SonicTaskConfig
+from vex_policy.config.config_types.control import input_parameters
 from vex_policy.policies.base import BasePolicy
+from vex_policy.policies.inference import resolve_control_gains, shared_session
+from vex_policy.policies.joint_command import position_command
 from vex_policy.policies.sonic_motion import load_motion_directory
 from vex_policy.policies.sonic_planner import (
     HW_TO_POLICY,
@@ -31,10 +33,8 @@ from vex_policy.policies.sonic_planner import (
     quaternion_slerp,
 )
 from vex_policy.sdk.base.base_interface import LowState
+from vex_policy.utils.latency import LatencyStage
 from vex_policy.utils.math.quat import quat_rotate_inverse
-
-_SESSION_CACHE: dict[tuple[str, tuple[str, ...]], onnxruntime.InferenceSession] = {}
-_SESSION_CACHE_LOCK = threading.Lock()
 
 _ACTOR_TERMS = (
     "token_state",
@@ -62,17 +62,6 @@ _ENCODER_TERMS = (
 )
 
 
-def _shared_session(path: str, provider: str) -> onnxruntime.InferenceSession:
-    providers = tuple(ort_providers(provider))
-    key = (path, providers)
-    with _SESSION_CACHE_LOCK:
-        session = _SESSION_CACHE.get(key)
-        if session is None:
-            session = onnxruntime.InferenceSession(path, providers=list(providers))
-            _SESSION_CACHE[key] = session
-        return session
-
-
 def _source_control_gains() -> tuple[np.ndarray, np.ndarray]:
     natural_frequency = 10.0 * 2.0 * np.pi
     damping_ratio = 2.0
@@ -82,7 +71,7 @@ def _source_control_gains() -> tuple[np.ndarray, np.ndarray]:
         "7520_22": 0.025101925,
         "4010": 0.00425,
     }
-    stiffness = {name: value * natural_frequency ** 2 for name, value in armature.items()}
+    stiffness = {name: value * natural_frequency**2 for name, value in armature.items()}
     damping = {name: 2.0 * damping_ratio * value * natural_frequency for name, value in armature.items()}
     types = (
         "7520_22",
@@ -123,12 +112,12 @@ def _source_control_gains() -> tuple[np.ndarray, np.ndarray]:
 
 def _same_command(left: MovementCommand | None, right: MovementCommand) -> bool:
     return (
-            left is not None
-            and left.mode == right.mode
-            and left.speed == right.speed
-            and left.height == right.height
-            and np.array_equal(left.movement_direction, right.movement_direction)
-            and np.array_equal(left.facing_direction, right.facing_direction)
+        left is not None
+        and left.mode == right.mode
+        and left.speed == right.speed
+        and left.height == right.height
+        and np.array_equal(left.movement_direction, right.movement_direction)
+        and np.array_equal(left.facing_direction, right.facing_direction)
     )
 
 
@@ -167,6 +156,10 @@ class SonicPolicy(BasePolicy):
             facing_direction=np.asarray([1.0, 0.0, 0.0], dtype=np.float32),
         )
         super().__init__(config)
+        self.setup_policy(config.task.model_path)
+        self.robot_config = resolve_control_gains(self.robot_config, self.onnx_kp, self.onnx_kd)
+        self.last_policy_action = np.zeros((1, self.num_dofs), dtype=np.float32)
+        self.scaled_policy_action = np.zeros((1, self.num_dofs), dtype=np.float32)
         self._action_scale_hw = np.asarray(self.robot_config.default_per_joint_action_scale, dtype=np.float32)
 
     @staticmethod
@@ -187,8 +180,8 @@ class SonicPolicy(BasePolicy):
 
     def setup_policy(self, model_path):
         provider = self.sonic_task.inference_provider
-        self.onnx_policy_session = _shared_session(model_path, provider)
-        self.encoder_session = _shared_session(self.sonic_task.encoder_model_path, provider)
+        self.onnx_policy_session = shared_session(model_path, ort_providers(provider))
+        self.encoder_session = shared_session(self.sonic_task.encoder_model_path, ort_providers(provider))
         self._validate_session(self.onnx_policy_session, 994, 29, "SONIC decoder")
         self._validate_session(self.encoder_session, 1762, 64, "SONIC encoder")
         self.onnx_input_names = [item.name for item in self.onnx_policy_session.get_inputs()]
@@ -196,7 +189,7 @@ class SonicPolicy(BasePolicy):
         self.encoder_input_name = self.encoder_session.get_inputs()[0].name
         self.encoder_output_name = self.encoder_session.get_outputs()[0].name
         if self.sonic_task.motion_source == "planner":
-            planner_session = _shared_session(self.sonic_task.planner_model_path, provider)
+            planner_session = shared_session(self.sonic_task.planner_model_path, ort_providers(provider))
             self.planner: SonicPlanner | None = SonicPlanner(
                 self.sonic_task.planner_model_path,
                 provider=provider,
@@ -242,12 +235,19 @@ class SonicPolicy(BasePolicy):
         self.last_policy_action = np.zeros((1, self.num_dofs), dtype=np.float32)
         self.scaled_policy_action = np.zeros((1, self.num_dofs), dtype=np.float32)
 
-    def activate(self, robot_state_data: LowState) -> str | None:
+        with self._command_lock:
+            self._movement_command = MovementCommand(
+                mode=self.sonic_task.planner_mode,
+                speed=0.0,
+                height=-1.0,
+                movement_direction=np.zeros(3, dtype=np.float32),
+                facing_direction=np.asarray([1.0, 0.0, 0.0], dtype=np.float32),
+            )
+
+    def _on_activate(self, robot_state_data: LowState) -> str | None:
         self._stop_planner()
         self._reset_sonic_state()
-        reason = super().activate(robot_state_data)
-        if reason:
-            return reason
+        self._apply_control({param.name: param.default for param in input_parameters(self.config.inputs)})
         if self.sonic_task.motion_source == "directory":
             with self._motion_lock:
                 self._motion = self._reference_motion
@@ -257,11 +257,11 @@ class SonicPolicy(BasePolicy):
             self._planner_thread = threading.Thread(target=self._planner_loop, name="sonic-planner-10hz", daemon=True)
             self._planner_thread.start()
 
-    def deactivate(self) -> None:
+    def _on_deactivate(self) -> None:
         self._stop_planner()
-        super().deactivate()
+        self._reset_sonic_state()
 
-    def close(self) -> None:
+    def _on_close(self) -> None:
         self._stop_planner()
 
     def _stop_planner(self) -> None:
@@ -271,12 +271,12 @@ class SonicPolicy(BasePolicy):
             stop.set()
             self._planner_wakeup.set()
         if thread is not None and thread.is_alive():
-            thread.join(timeout=2.0)
+            thread.join()
         self._planner_stop = None
         self._planner_thread = None
         self._planner_wakeup.clear()
 
-    def apply_control(self, control: Mapping[str, float]) -> None:
+    def _apply_control(self, control: Mapping[str, float]) -> None:
         if self.sonic_task.motion_source == "directory":
             return
         # Preserve the repository's panel-to-robot convention: (vy, -vx, -yaw).
@@ -344,17 +344,17 @@ class SonicPolicy(BasePolicy):
                 motion = self._motion
                 frame = self._motion_frame
             due = (
-                    robot is not None
-                    and not self._one_shot_complete
-                    and (
-                            motion is None
-                            or not _same_command(last_command, command)
-                            or (
-                                    command.mode not in STATIC_MODES
-                                    and command.speed != 0.0
-                                    and started - last_plan_at >= self._replan_interval(command.mode)
-                            )
+                robot is not None
+                and not self._one_shot_complete
+                and (
+                    motion is None
+                    or not _same_command(last_command, command)
+                    or (
+                        command.mode not in STATIC_MODES
+                        and command.speed != 0.0
+                        and started - last_plan_at >= self._replan_interval(command.mode)
                     )
+                )
             )
             if due:
                 try:
@@ -366,6 +366,8 @@ class SonicPolicy(BasePolicy):
                         else self.planner.motion_context(motion, frame)
                     )
                     generated = self.planner.infer(context, command)
+                    if stop.is_set():
+                        break
                     with self._motion_lock:
                         self._pending_motion = generated
                     last_command = command
@@ -505,6 +507,17 @@ class SonicPolicy(BasePolicy):
         state[0, 3:7] = motion.root_quaternions[frame]
         state[0, 7:] = motion.joint_positions[frame, HW_TO_POLICY]
         return state
+
+    def _compute_command(self, robot_state_data):
+        with self.latency_tracker.measure(LatencyStage.INFERENCE):
+            action = self.rl_inference(robot_state_data)
+        with self.latency_tracker.measure(LatencyStage.POSTPROCESSING):
+            return position_command(
+                action + self.default_dof_angles,
+                self.robot_config.motor_kp,
+                self.robot_config.motor_kd,
+                self.controlled_joint_mask,
+            )
 
 
 __all__ = ["MODE_NAMES", "SonicPolicy"]

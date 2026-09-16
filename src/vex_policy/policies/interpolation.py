@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
 import numpy as np
-from loguru import logger
 
 from vex_policy.config.config_types import InferenceConfig, InterpolationTaskConfig
 from vex_policy.robots import G1_29DOF, G1_JOINT_LOWER, G1_JOINT_UPPER, G1_JOINT_VELOCITY
@@ -15,6 +13,7 @@ from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.joint_interpolation import JointPositionInterpolator
 
 from .base import BasePolicy, PolicyJointCommand, PolicyRuntimeFault
+from .joint_command import position_command
 
 
 def load_motion_pose(
@@ -65,15 +64,7 @@ class InterpolationPolicy(BasePolicy):
     def __init__(self, config: InferenceConfig):
         if not isinstance(config.task, InterpolationTaskConfig):
             raise TypeError("InterpolationPolicy requires InterpolationTaskConfig")
-        self.config = config
-        self.logger = logger
-        self._init_robot_config(config.robot)
-        self.rl_rate = config.task.rl_rate
-        self.use_phase = False
-        self._init_latency_tracking()
-        self.guard = None
-        self._active = False
-
+        super().__init__(config)
         kp = self.robot_config.motor_kp
         kd = self.robot_config.motor_kd
         kp = self.robot_config.stiff_startup_kp if kp is None else kp
@@ -108,40 +99,24 @@ class InterpolationPolicy(BasePolicy):
             raise ValueError("invalid joint positions in LowState")
         return positions[0]
 
-    def activate(self, robot_state: LowState) -> str | None:
-        self.deactivate()
+    def _on_activate(self, robot_state: LowState) -> str | None:
         try:
             self._interpolator.reset(self._current_q(robot_state), self._target_q)
         except ValueError as error:
             return f"interpolation_start_failed: {error}"
-        self._active = True
         self.logger.info(
             f"Interpolating to motion {self.config.task.target_frame} frame ({self.config.task.duration_s:.1f}s)"
         )
         return None
 
-    def deactivate(self) -> None:
-        self._active = False
+    def _on_deactivate(self) -> None:
         self._interpolator.clear()
 
-    def apply_control(self, control: Mapping[str, float]) -> None:
-        """This policy has no runtime control parameters."""
-        del control
-
-    def compute_joint_command(self, robot_state_data: LowState) -> PolicyJointCommand:
-        if not self._active:
-            raise RuntimeError("Interpolation policy is not active")
+    def _compute_command(self, robot_state_data: LowState) -> PolicyJointCommand:
         try:
             # `complete` only signals elapsed nominal duration. Keep advancing
             # the bounded target afterward until it arrives, then hold it.
             step = self._interpolator.next(self._current_q(robot_state_data))
         except ValueError as error:
             raise PolicyRuntimeFault(f"interpolation_failed: {error}") from error
-        return PolicyJointCommand(
-            q=step.q_target - self.joint_offsets,
-            dq=np.zeros(self.num_dofs, dtype=np.float64),
-            tau=np.zeros(self.num_dofs, dtype=np.float64),
-            kp=self._kp.copy(),
-            kd=self._kd.copy(),
-            controlled_joints=self.controlled_joint_mask.copy(),
-        )
+        return position_command(step.q_target - self.joint_offsets, self._kp, self._kd, self.controlled_joint_mask)

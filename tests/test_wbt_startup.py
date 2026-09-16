@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from collections import deque
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from vex_policy.config.config_types import PolicySpec, WbtTaskConfig
-from vex_policy.policies.wbt import WholeBodyTrackingPolicy
+from vex_policy.policies.base import BasePolicy
+from vex_policy.policies.joint_command import PositionAction
+from vex_policy.policies.observations import ObservationHistory
+from vex_policy.policies.wbt import WbtStage, WholeBodyTrackingPolicy
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.joint_interpolation import JointPositionInterpolator
 
@@ -25,17 +27,31 @@ def _state(joint_pos=(0.0, 0.0)) -> LowState:
 
 def _policy(startup_mode: str = "interpolate") -> WholeBodyTrackingPolicy:
     policy = object.__new__(WholeBodyTrackingPolicy)
-    policy.config = SimpleNamespace(task=SimpleNamespace(startup_mode=startup_mode, init_duration_s=1.0, rl_rate=2.0))
-    policy.guard = None
-    policy.num_dofs = 2
+    config = SimpleNamespace(
+        task=SimpleNamespace(startup_mode=startup_mode, init_duration_s=1.0, rl_rate=2.0, motion_start_timestep=0),
+        robot=SimpleNamespace(
+            num_joints=2, dof_names=("a", "b"), default_dof_angles=(0.0, 0.0), joint_offsets_deg=None
+        ),
+        action_mask=None,
+    )
+    BasePolicy.__init__(policy, config)
+    policy.actions = PositionAction(2, policy.action_mask)
+    policy.actions.last.fill(1.0)
+    policy.observations = ObservationHistory(
+        SimpleNamespace(
+            obs_dict={"actor_obs": ["dof_pos"]},
+            obs_dims={"dof_pos": 2},
+            obs_scales={"dof_pos": 1.0},
+            history_length_dict={"actor_obs": 2},
+        )
+    )
+    policy.observations.prepare({"dof_pos": np.ones((1, 2))})
+    policy.timestep_util = SimpleNamespace(reset=lambda **kwargs: None, timestep=0)
+    policy._stage = WbtStage.INACTIVE
     policy.motion_command_0 = np.asarray([[1.0, 2.0, 0.0, 0.0]])
     policy.ref_quat_xyzw_0 = np.asarray([[0.0, 0.0, 0.0, 1.0]])
     policy.motion_command_t = np.zeros_like(policy.motion_command_0)
     policy.ref_quat_xyzw_t = np.zeros_like(policy.ref_quat_xyzw_0)
-    policy.last_policy_action = np.ones((1, 2))
-    policy.scaled_policy_action = np.ones((1, 2))
-    policy.obs_history_buffers = {"actor_obs": {"dof_pos": deque([np.ones((1, 2))], maxlen=2)}}
-    policy.obs_buf_dict = {"actor_obs": np.ones((1, 4))}
     policy._activation_q = None
     policy._startup_interpolator = JointPositionInterpolator(
         joint_lower=(-10.0, -10.0),
@@ -45,12 +61,7 @@ def _policy(startup_mode: str = "interpolate") -> WholeBodyTrackingPolicy:
         duration_s=1.0,
         slew_safety_factor=1.0,
     )
-    policy._stiff_hold_active = True
     policy.motion_clip_progressing = False
-    policy.use_policy_action = False
-    policy.get_ready_state = False
-    policy.init_count = 0
-    policy._init_phase_components = lambda: None
     policy.logger = SimpleNamespace(info=lambda message: None)
     return policy
 
@@ -87,30 +98,29 @@ def test_wbt_startup_mode_rejects_unknown_value():
 def test_wbt_immediate_start_enables_policy_without_initialization():
     policy = _policy("immediate")
     started = []
-    policy._handle_start_policy = lambda state: started.append(state)
+    policy._start_tracking = lambda state: started.append(state)
 
     assert policy.activate(_state()) is None
 
     assert len(started) == 1
     assert policy._activation_q is None
-    np.testing.assert_allclose(policy.last_policy_action, 0.0)
-    assert not policy.obs_history_buffers["actor_obs"]["dof_pos"]
-    np.testing.assert_allclose(policy.obs_buf_dict["actor_obs"], 0.0)
+    np.testing.assert_allclose(policy.actions.last, 0.0)
+    assert not policy.observations.obs_history_buffers["actor_obs"]["dof_pos"]
+    np.testing.assert_allclose(policy.observations.obs_buf_dict["actor_obs"], 0.0)
     np.testing.assert_allclose(policy.motion_command_t, policy.motion_command_0)
 
 
 def test_wbt_interpolates_from_fixed_activation_pose_then_starts_policy():
     policy = _policy("interpolate")
     started = []
-    policy._handle_start_policy = lambda state: started.append(state)
+    policy._start_tracking = lambda state: started.append(state)
 
     assert policy.activate(_state((0.0, 0.0))) is None
-    assert policy.get_ready_state
-    assert policy.use_policy_action
-    assert not policy._stiff_hold_active
+    assert policy._stage is WbtStage.INITIALIZING
+    assert policy.is_active
 
-    first = policy.get_init_target(_state((0.25, 0.5)))
-    second = policy.get_init_target(_state((0.75, 1.5)))
+    first = policy._initialization_target(_state((0.25, 0.5)))
+    second = policy._initialization_target(_state((0.75, 1.5)))
 
     np.testing.assert_allclose(first, [[0.5, 1.0]])
     np.testing.assert_allclose(second, [[1.0, 2.0]])
@@ -128,9 +138,9 @@ def test_wbt_interpolation_applies_position_and_velocity_limits():
         duration_s=1.0,
         slew_safety_factor=1.0,
     )
-    policy._handle_start_policy = lambda state: None
+    policy._start_tracking = lambda state: None
 
     assert policy.activate(_state()) is None
-    first = policy.get_init_target(_state())
+    first = policy._initialization_target(_state())
 
     np.testing.assert_allclose(first, [[0.1, 0.2]])

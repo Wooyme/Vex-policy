@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Any
 
 import numpy as np
@@ -68,36 +68,60 @@ class PolicyStateMachine:
         self._specs = {item.spec.name: item.spec for item in resolved}
         self.inbox = inbox or CommandInbox(self._specs, clock=clock)
         self.transport = transport or MqttTransport(runtime.mqtt, tuple(item.spec for item in resolved), self.inbox)
-        self.interface_manager = interface_manager or InterfaceManager.get()
-        self.policies = instances or self._build_policies()
-        if set(self.policies) != set(self._specs):
-            raise ValueError("Policy instances must exactly match configured policy names")
-        owner = next(iter(self.policies.values()))
-        self.dof_names = tuple(owner.dof_names)
-        self._policy_executor = ThreadPoolExecutor(
-            max_workers=2,
-            thread_name_prefix="vex-policy",
-        )
+        self.policies: dict[str, BasePolicy] = {}
+        self._policy_executor = None
+        try:
+            self.interface_manager = interface_manager or InterfaceManager.get()
+            self.policies = instances if instances is not None else self._build_policies()
+            if set(self.policies) != set(self._specs):
+                raise ValueError("Policy instances must exactly match configured policy names")
+            owner = next(iter(self.policies.values()))
+            self.dof_names = tuple(owner.dof_names)
+            self._policy_executor = ThreadPoolExecutor(
+                max_workers=2,
+                thread_name_prefix="vex-policy",
+            )
 
-        rate = resolved[0].config.task.rl_rate
-        self.rate = RateLimiter(rate)
-        self._state_period = 1.0 / runtime.mqtt.state_frequency_hz
-        self._next_state_publish = self._started_at
-        self.state = "startup_latched"
-        self.active_policy: tuple[str, ...] = ()
-        self.requested_policy: tuple[str, ...] = ()
-        self.reason: str | None = "startup"
-        self.last_command_seq: int | None = None
-        self._last_status: tuple[Any, ...] | None = None
+            rate = resolved[0].config.task.rl_rate
+            self.rate = RateLimiter(rate)
+            self._state_period = 1.0 / runtime.mqtt.state_frequency_hz
+            self._next_state_publish = self._started_at
+            self.state = "startup_latched"
+            self.active_policy: tuple[str, ...] = ()
+            self.requested_policy: tuple[str, ...] = ()
+            self.reason: str | None = "startup"
+            self.last_command_seq: int | None = None
+            self._last_status: tuple[Any, ...] | None = None
+        except BaseException:
+            if self._policy_executor is not None:
+                self._policy_executor.shutdown(wait=True)
+            self._close_policies(self.policies.values())
+            try:
+                self.transport.close()
+            except Exception:
+                logger.exception("Failed to close transport after runtime initialization failure")
+            raise
 
     def _build_policies(self) -> dict[str, BasePolicy]:
         instances: dict[str, BasePolicy] = {}
-        for item in self.resolved:
-            cls = _policy_class(item.kind)
-            policy = cls(item.config)
-            instances[item.spec.name] = policy
-            logger.info(f"Preloaded policy {item.spec.name}: {cls.__name__}")
+        try:
+            for item in self.resolved:
+                cls = _policy_class(item.kind)
+                policy = cls(item.config)
+                instances[item.spec.name] = policy
+                logger.info(f"Preloaded policy {item.spec.name}: {cls.__name__}")
+        except BaseException:
+            self._close_policies(instances.values())
+            raise
         return instances
+
+    @staticmethod
+    def _close_policies(policies) -> None:
+        for policy in policies:
+            try:
+                policy.close()
+            except Exception:
+                logger.exception("Failed to close policy")
 
     def _status_payload(self) -> dict[str, Any]:
         return {
@@ -116,11 +140,19 @@ class PolicyStateMachine:
             self._last_status = marker
 
     def _deactivate(self) -> None:
-        if not self.active_policy:
-            return
-        for name in self.active_policy:
-            self.policies[name].deactivate()
+        names = self.active_policy
         self.active_policy = ()
+        self._stop_policies(names)
+
+    def _stop_policies(self, names) -> None:
+        errors = []
+        for name in names:
+            try:
+                self.policies[name].deactivate()
+            except Exception as error:
+                errors.append(error)
+        if errors:
+            raise ExceptionGroup("Policy deactivation failed", errors)
 
     def _latch(self, reason: str) -> None:
         self._deactivate()
@@ -142,26 +174,37 @@ class PolicyStateMachine:
 
         previous = set(self.active_policy)
         desired = set(names)
-        for name in self.active_policy:
-            if name not in desired:
-                self.policies[name].deactivate()
+        live = dict.fromkeys(self.active_policy)
+        try:
+            for name in self.active_policy:
+                if name not in desired:
+                    self.policies[name].deactivate()
+                    live.pop(name)
 
-        activated: list[str] = []
-        for name in names:
-            if name in previous:
-                continue
-            reason = self.policies[name].activate(robot_state)
-            if reason:
-                for activated_name in activated:
-                    self.policies[activated_name].deactivate()
-                for retained_name in previous & desired:
-                    self.policies[retained_name].deactivate()
-                self.active_policy = ()
-                self.state = "latched"
-                self.reason = reason
+            for name in names:
+                if name in previous:
+                    continue
+                live[name] = None
+                reason = self.policies[name].activate(robot_state)
+                if reason is not None:
+                    self.active_policy = ()
+                    self.state = "latched"
+                    self.reason = reason
+                    self._stop_policies(live)
+                    self._publish_status()
+                    return
+        except BaseException as error:
+            self.active_policy = ()
+            self.state = "latched"
+            self.reason = f"policy_fault:{'+'.join(names)}:{error}"
+            try:
+                self._stop_policies(live)
+            except Exception:
+                logger.exception("Policy activation rollback failed")
+            if isinstance(error, PolicyRuntimeFault):
                 self._publish_status()
                 return
-            activated.append(name)
+            raise
 
         self.active_policy = names
         self.state = "running"
@@ -276,20 +319,25 @@ class PolicyStateMachine:
         self._publish_status()
 
     def run(self) -> None:
-        self.transport.start()
-        self._publish_status(force=True)
         try:
+            self.transport.start()
+            self._publish_status(force=True)
             while True:
                 self.tick()
                 self.rate.sleep()
         except KeyboardInterrupt:
             logger.info("Policy runtime interrupted")
         finally:
-            self._deactivate()
-            self._policy_executor.shutdown(wait=True)
-            for policy in self.policies.values():
-                policy.close()
-            self.transport.close()
+            try:
+                self._policy_executor.shutdown(wait=True)
+            finally:
+                try:
+                    self._deactivate()
+                finally:
+                    try:
+                        self._close_policies(self.policies.values())
+                    finally:
+                        self.transport.close()
 
     def _step_active_policies(self, robot_state: LowState) -> None:
         """Infer all active policies from one state snapshot and publish one merged command."""
@@ -297,9 +345,11 @@ class PolicyStateMachine:
             commands = [self.policies[self.active_policy[0]].step(robot_state)]
         else:
             futures = {
-                name: self._policy_executor.submit(self.policies[name].step, robot_state)
-                for name in self.active_policy
+                name: self._policy_executor.submit(self.policies[name].step, robot_state) for name in self.active_policy
             }
+            # A sibling must not still be running when fault handling tears down
+            # its episode resources. No partial command is published on failure.
+            wait(futures.values())
             commands = [futures[name].result() for name in self.active_policy]
 
         owner = self.policies[self.active_policy[0]]

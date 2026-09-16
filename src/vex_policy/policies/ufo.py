@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import re
-import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 import joblib
 import numpy as np
-import onnxruntime
 import yaml
-from loguru import logger
 
 from vex_policy.config.config_types import (
     InferenceConfig,
@@ -23,15 +20,15 @@ from vex_policy.config.config_types import (
 )
 from vex_policy.policies.base import BasePolicy, PolicyJointCommand, PolicyRuntimeFault
 from vex_policy.policies.guard.ufo import UfoGuard
+from vex_policy.policies.inference import shared_session
+from vex_policy.policies.joint_command import position_command
 from vex_policy.policies.sonic_planner import ort_providers
 from vex_policy.robots import G1_JOINT_LOWER, G1_JOINT_UPPER, G1_JOINT_VELOCITY
 from vex_policy.robots.g1 import DOF_NAMES
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.joint_interpolation import JointPositionInterpolator, limit_joint_position_target
+from vex_policy.utils.latency import LatencyStage
 from vex_policy.utils.math.quat import quat_rotate_inverse
-
-_SESSION_CACHE: dict[tuple[str, tuple[str, ...]], onnxruntime.InferenceSession] = {}
-_SESSION_CACHE_LOCK = threading.Lock()
 
 _ACTOR_TERMS = (
     "dof_pos_minus_default",
@@ -57,6 +54,7 @@ _OBS_DIMS = {
     "dof_vel_history": 116,
     "projected_gravity_history": 12,
 }
+
 
 @dataclass(frozen=True)
 class _UfoModelConfig:
@@ -141,17 +139,6 @@ def _load_model_config(path: str, dof_names: tuple[str, ...]) -> _UfoModelConfig
     )
 
 
-def _shared_session(path: str, provider: str) -> onnxruntime.InferenceSession:
-    providers = tuple(ort_providers(provider))
-    key = (path, providers)
-    with _SESSION_CACHE_LOCK:
-        session = _SESSION_CACHE.get(key)
-        if session is None:
-            session = onnxruntime.InferenceSession(path, providers=list(providers))
-            _SESSION_CACHE[key] = session
-        return session
-
-
 def _latent_vector(value, label: str) -> np.ndarray:
     latent = np.asarray(value, dtype=np.float32)
     if latent.shape == (1, 256):
@@ -182,10 +169,8 @@ class UfoPolicy(BasePolicy):
         if config.observation.history_length_dict != {"actor_obs": 1}:
             raise ValueError("UFO observation history_length_dict must be {'actor_obs': 1}")
 
-        self.config = config
+        super().__init__(config)
         self.ufo_task = config.task
-        self.logger = logger
-        self._init_robot_config(config.robot)
         model_config = _load_model_config(config.task.model_config, DOF_NAMES)
         self.action_rescale = model_config.action_rescale
         self.action_scale = model_config.action_scale
@@ -194,14 +179,12 @@ class UfoPolicy(BasePolicy):
         self.default_dof_angles = model_config.default_dof_angles
         self.rl_rate = config.task.rl_rate
         self.rl_dt = 1.0 / self.rl_rate
-        self.use_phase = False
-        self._init_latency_tracking()
         if config.guard:
             self.guard = UfoGuard(config.guard, self)
         else:
             self.guard = None
 
-        self.onnx_policy_session = _shared_session(config.task.model_path, config.task.inference_provider)
+        self.onnx_policy_session = shared_session(config.task.model_path, ort_providers(config.task.inference_provider))
         self._validate_session()
         self.onnx_input_name = self.onnx_policy_session.get_inputs()[0].name
         self.onnx_output_name = self.onnx_policy_session.get_outputs()[0].name
@@ -312,11 +295,7 @@ class UfoPolicy(BasePolicy):
         for name, history in self._history.items():
             history[:] = np.asarray(terms[name], dtype=np.float32)
 
-    def activate(self, robot_state: LowState) -> str | None:
-        if self.guard:
-            result, reason = self.guard.start_check(robot_state)
-            if not result:
-                return reason
+    def _on_activate(self, robot_state: LowState) -> str | None:
         joint_pos = np.asarray(robot_state.joint_pos[0], dtype=np.float64)
         self._reset_history()
         self._activation_q = joint_pos.copy()
@@ -347,7 +326,7 @@ class UfoPolicy(BasePolicy):
             self.logger.info(f"UFO initialization started ({self.ufo_task.init_duration_s:.1f}s)")
         return None
 
-    def deactivate(self) -> None:
+    def _on_deactivate(self) -> None:
         self._initializing = False
         self._tracking_playing = False
         self._activation_q = None
@@ -355,7 +334,7 @@ class UfoPolicy(BasePolicy):
         self._startup_interpolator.clear()
         self._reset_history()
 
-    def apply_control(self, control: Mapping[str, float]) -> None:
+    def _apply_control(self, control: Mapping[str, float]) -> None:
         if control:
             raise PolicyRuntimeFault("ufo_unexpected_control_input")
 
@@ -474,49 +453,32 @@ class UfoPolicy(BasePolicy):
         except ValueError as error:
             raise PolicyRuntimeFault(f"ufo_invalid_q_target: {error}") from error
 
-    def step(self, robot_state: LowState) -> PolicyJointCommand:
+    def _compute_command(self, robot_state: LowState) -> PolicyJointCommand:
         if self._activation_q is None:
             raise PolicyRuntimeFault("ufo_policy_not_active")
-        self.latency_tracker.start_cycle()
-        try:
-            with self.latency_tracker.measure("preprocessing"):
-                inputs = self.prepare_obs_for_rl(robot_state)
-            with self.latency_tracker.measure("inference"):
-                policy_target = self._infer(inputs)
-            with self.latency_tracker.measure("postprocessing"):
-                if self._initializing:
-                    try:
-                        interpolation = self._startup_interpolator.next(robot_state.joint_pos[0])
-                    except (RuntimeError, ValueError) as error:
-                        raise PolicyRuntimeFault(f"ufo_interpolation_failed: {error}") from error
-                    q_target = interpolation.q_target
-                    if interpolation.complete:
-                        self._initializing = False
-                        if isinstance(self.ufo_task.context, UfoTrackingContextConfig):
-                            self._tracking_frame = self.ufo_task.context.start_frame
-                            self._tracking_playing = True
-                        self.logger.info("UFO initialization complete; policy action enabled")
-                else:
-                    q_target = self._slew_limit(policy_target, robot_state)
-                if not np.isfinite(q_target).all():
-                    raise PolicyRuntimeFault("ufo_non_finite_q_target")
-                self._last_cmd_q = q_target.copy()
-            return PolicyJointCommand(
-                q=q_target,
-                dq=np.zeros(29, dtype=np.float64),
-                tau=np.zeros(29, dtype=np.float64),
-                kp=self.kp.copy(),
-                kd=self.kd.copy(),
-                controlled_joints=self.controlled_joint_mask.copy(),
-            )
-        finally:
-            self.latency_tracker.end_cycle()
-
-    def get_reference_state(self) -> np.ndarray | None:
-        return None
-
-    def close(self) -> None:
-        """UFO offline contexts do not own background resources."""
+        with self.latency_tracker.measure(LatencyStage.PREPROCESSING):
+            inputs = self.prepare_obs_for_rl(robot_state)
+        with self.latency_tracker.measure(LatencyStage.INFERENCE):
+            policy_target = self._infer(inputs)
+        with self.latency_tracker.measure(LatencyStage.POSTPROCESSING):
+            if self._initializing:
+                try:
+                    interpolation = self._startup_interpolator.next(robot_state.joint_pos[0])
+                except (RuntimeError, ValueError) as error:
+                    raise PolicyRuntimeFault(f"ufo_interpolation_failed: {error}") from error
+                q_target = interpolation.q_target
+                if interpolation.complete:
+                    self._initializing = False
+                    if isinstance(self.ufo_task.context, UfoTrackingContextConfig):
+                        self._tracking_frame = self.ufo_task.context.start_frame
+                        self._tracking_playing = True
+                    self.logger.info("UFO initialization complete; policy action enabled")
+            else:
+                q_target = self._slew_limit(policy_target, robot_state)
+            if not np.isfinite(q_target).all():
+                raise PolicyRuntimeFault("ufo_non_finite_q_target")
+            self._last_cmd_q = q_target.copy()
+        return position_command(q_target, self.kp, self.kd, self.controlled_joint_mask)
 
 
 __all__ = ["UfoPolicy"]

@@ -246,3 +246,174 @@ def test_policy_runtime_fault_latches_without_writing_command():
     assert machine.active_policy == ()
     assert machine.reason == "policy_fault:lower:invalid_action"
     assert not backend.commands
+
+
+@pytest.mark.parametrize("failure", ["unsafe_pose", PolicyRuntimeFault("bad data"), ValueError("bug")])
+@pytest.mark.parametrize("retain_lower", [False, True])
+def test_activation_failure_rolls_back_new_and_retained_policies(failure, retain_lower):
+    robot_state = _low_state()
+    backend = _FakeInterface(robot_state)
+    lower = _ParallelPolicy(threading.Barrier(1), _command([1, 2, 3], [True] * 3, 10))
+    upper = _ParallelPolicy(threading.Barrier(1), lower.command)
+    events = []
+    lower.deactivate = lambda: events.append("lower_stopped")
+    upper.deactivate = lambda: events.append("upper_stopped")
+
+    def reject(state):
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    upper.activate = reject
+    machine = _state_machine(InterfaceManager(backend), lower, upper)
+    machine.active_policy = ("lower",) if retain_lower else ()
+    try:
+        if isinstance(failure, ValueError):
+            with pytest.raises(ValueError, match="bug"):
+                machine._activate(("lower", "upper"), robot_state)
+        else:
+            machine._activate(("lower", "upper"), robot_state)
+        assert machine.state == "latched"
+        assert machine.active_policy == ()
+        assert set(events) == {"lower_stopped", "upper_stopped"}
+        assert lower.activated == ([] if retain_lower else [robot_state])
+        assert not backend.commands
+        if isinstance(failure, str):
+            assert machine.reason == failure
+        elif isinstance(failure, PolicyRuntimeFault):
+            assert machine.reason == "policy_fault:lower+upper:bad data"
+    finally:
+        machine._policy_executor.shutdown(wait=True)
+
+
+def test_successful_pair_change_does_not_restart_retained_policy():
+    robot_state = _low_state()
+    backend = _FakeInterface(robot_state)
+    lower = _ParallelPolicy(threading.Barrier(1), _command([1, 2, 3], [True] * 3, 10))
+    upper = _ParallelPolicy(threading.Barrier(1), lower.command)
+    machine = _state_machine(InterfaceManager(backend), lower, upper)
+    machine.active_policy = ("lower",)
+    try:
+        machine._activate(("upper", "lower"), robot_state)
+        assert lower.activated == []
+        assert upper.activated == [robot_state]
+        assert machine.active_policy == ("lower", "upper")
+        assert machine.state == "running"
+    finally:
+        machine._policy_executor.shutdown(wait=True)
+
+
+def test_parallel_fault_waits_for_sibling_before_deactivation():
+    robot_state = _low_state()
+    backend = _FakeInterface(robot_state)
+    lower = _ParallelPolicy(threading.Barrier(1), _command([1, 2, 3], [True] * 3, 10))
+    upper = _ParallelPolicy(threading.Barrier(1), lower.command)
+    entered, finish, finished, deactivated, failed = (threading.Event() for _ in range(5))
+
+    def lower_step(state):
+        assert entered.wait(2)
+        failed.set()
+        raise PolicyRuntimeFault("failed inference")
+
+    def upper_step(state):
+        entered.set()
+        assert finish.wait(2)
+        finished.set()
+        return upper.command
+
+    def deactivate():
+        assert finished.is_set()
+        deactivated.set()
+
+    lower.step, upper.step = lower_step, upper_step
+    lower.deactivate = upper.deactivate = deactivate
+    machine = _state_machine(InterfaceManager(backend), lower, upper)
+    machine.inbox = SimpleNamespace(
+        snapshot=lambda: SimpleNamespace(
+            received_at=0.0,
+            packet=SimpleNamespace(
+                seq=1,
+                control=SimpleNamespace(policy=("lower", "upper"), estop=False, inputs={"lower": {}, "upper": {}}),
+            ),
+        )
+    )
+    try:
+        with ThreadPoolExecutor(max_workers=1) as driver:
+            result = driver.submit(machine.tick, 0.0)
+            try:
+                assert failed.wait(2)
+                assert not deactivated.wait(0.05)
+                assert not result.done()
+            finally:
+                finish.set()
+            result.result()
+        assert deactivated.is_set()
+        assert machine.state == "latched"
+        assert not backend.commands
+    finally:
+        finish.set()
+        machine._policy_executor.shutdown(wait=True)
+
+
+@pytest.mark.parametrize("failure_at", ["start", "tick", "deactivate"])
+def test_runtime_exit_closes_all_resources_despite_individual_failures(failure_at):
+    robot_state = _low_state()
+    backend = _FakeInterface(robot_state)
+    lower = _ParallelPolicy(threading.Barrier(1), _command([1, 2, 3], [True] * 3, 10))
+    upper = _ParallelPolicy(threading.Barrier(1), lower.command)
+    events = []
+
+    def fail():
+        raise ValueError("expected failure")
+
+    def close_lower():
+        events.append("lower")
+        fail()
+
+    lower.close = close_lower
+    upper.close = lambda: events.append("upper")
+    if failure_at == "deactivate":
+        lower.deactivate = fail
+    machine = _state_machine(InterfaceManager(backend), lower, upper)
+    machine.transport = SimpleNamespace(
+        start=fail if failure_at == "start" else lambda: None, close=lambda: events.append("transport")
+    )
+    machine.tick = fail
+    with pytest.raises((ValueError, ExceptionGroup)):
+        machine.run()
+    assert events == ["lower", "upper", "transport"]
+    with pytest.raises(RuntimeError, match="shutdown"):
+        machine._policy_executor.submit(lambda: None)
+
+
+def test_partial_runtime_construction_closes_preloaded_policies_and_transport(monkeypatch):
+    from vex_policy.policies import policy_state_machine as runtime_module
+
+    events = []
+
+    def build(config):
+        if config == "broken":
+            raise ValueError("model load failed")
+
+        def close():
+            events.append(config)
+            if config == "first":
+                raise ValueError("close failed")
+
+        return SimpleNamespace(close=close)
+
+    monkeypatch.setattr(runtime_module, "_policy_class", lambda kind: build)
+    resolved = tuple(
+        SimpleNamespace(spec=SimpleNamespace(name=name), config=name, kind="test")
+        for name in ("first", "second", "broken")
+    )
+    transport = SimpleNamespace(close=lambda: events.append("transport"))
+    with pytest.raises(ValueError, match="model load failed"):
+        PolicyStateMachine(
+            SimpleNamespace(),
+            resolved,
+            inbox=SimpleNamespace(),
+            transport=transport,
+            interface_manager=SimpleNamespace(),
+        )
+    assert events == ["first", "second", "transport"]

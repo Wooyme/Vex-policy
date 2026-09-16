@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import sys
+from enum import StrEnum
 
 import numpy as np
-import onnx
 import onnxruntime
 from loguru import logger
 from termcolor import colored
@@ -12,11 +12,15 @@ from termcolor import colored
 from vex_policy.config.config_types.inference import InferenceConfig
 from vex_policy.policies.base import BasePolicy, PolicyRuntimeFault
 from vex_policy.policies.guard.wbt import WbtGuard
+from vex_policy.policies.inference import load_metadata, resolve_control_gains
+from vex_policy.policies.joint_command import PositionAction, position_command
+from vex_policy.policies.observations import ObservationHistory
 from vex_policy.policies.wbt_utils import MotionClockUtil, NpzTargetSource, PinocchioRobot, TimestepUtil
 from vex_policy.robots import G1_JOINT_LOWER, G1_JOINT_UPPER, G1_JOINT_VELOCITY
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.clock import ClockSub
 from vex_policy.utils.joint_interpolation import JointPositionInterpolator
+from vex_policy.utils.latency import LatencyStage
 from vex_policy.utils.math.quat import (
     matrix_from_quat,
     quat_mul,
@@ -28,12 +32,24 @@ from vex_policy.utils.math.quat import (
 )
 
 
+class WbtStage(StrEnum):
+    INACTIVE = "inactive"
+    INITIALIZING = "initializing"
+    TRACKING = "tracking"
+
+
 class WholeBodyTrackingPolicy(BasePolicy):
     def __init__(self, config: InferenceConfig):
+        super().__init__(config)
+        self.observations = ObservationHistory(config.observation)
+        self.actions = PositionAction(
+            self.num_dofs,
+            self.action_mask,
+            require_full_body=config.action_mask is not None,
+            force_zero=config.task.debug.force_zero_action,
+        )
+        self._stage = WbtStage.INACTIVE
         self._target_source = None
-        self.scaled_policy_action = None
-        self.last_policy_action = None
-        self.config = config
 
         # initialize motion state
         self.motion_clip_progressing = False
@@ -54,7 +70,6 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
         # Initialize clock for sim-time synchronization
         self.clock_sub = ClockSub()
-        self.clock_sub.start()
         clock_util = MotionClockUtil(self.clock_sub)
         self.timestep_util = TimestepUtil(
             clock=clock_util,
@@ -65,62 +80,33 @@ class WholeBodyTrackingPolicy(BasePolicy):
         # Read use_sim_time from config
         self.use_sim_time = config.task.use_sim_time
 
-        self._stiff_hold_active = True
         self.robot_yaw_offset = 0.0
         self.motion_yaw_offset = 0.0
         self.per_joint_policy_action_scale: np.ndarray | None = None
 
-        super().__init__(config)
+        self.setup_policy(config.task.model_path)
+        self.robot_config = resolve_control_gains(self.robot_config, self.onnx_kp, self.onnx_kd)
         self._configure_action_scales()
         if self.config.guard:
             self.guard = WbtGuard(self.config.guard, self)
-        # Load stiff startup parameters from robot config
-        if config.robot.stiff_startup_pos is not None:
-            self._stiff_hold_q = np.array(config.robot.stiff_startup_pos, dtype=np.float32).reshape(1, -1)
-        else:
-            # Fallback to default_dof_angles if not specified
-            self._stiff_hold_q = np.array(config.robot.default_dof_angles, dtype=np.float32).reshape(1, -1)
 
-        if config.robot.stiff_startup_kp is not None:
-            self._stiff_hold_kp = np.array(config.robot.stiff_startup_kp, dtype=np.float32)
-        else:
-            raise ValueError("Robot config must specify stiff_startup_kp for WBT policy")
+        # Retain the configured stdin gate, but preload never sends a command.
+        if not self.config.task.skip_stiff_prompt:
+            if sys.stdin.isatty():
+                logger.info("WBT preloaded. Press Enter to allow startup.")
+                try:
+                    input()
+                except EOFError:
+                    logger.warning("WBT startup confirmation skipped: stdin reached EOF")
+            else:
+                logger.warning("WBT startup confirmation skipped: non-interactive stdin")
 
-        if config.robot.stiff_startup_kd is not None:
-            self._stiff_hold_kd = np.array(config.robot.stiff_startup_kd, dtype=np.float32)
-        else:
-            raise ValueError("Robot config must specify stiff_startup_kd for WBT policy")
-
-        if self._stiff_hold_q.shape[1] != self.num_dofs:
-            raise ValueError("Stiff startup pose dimension mismatch with robot DOFs")
-
-        # Prompt user before entering stiff mode (only if stdin is available)
-        def _show_warning():
-            logger.warning(
-                colored(
-                    "⚠️  Non-interactive mode detected - cannot prompt for stiff mode confirmation!",
-                    "red",
-                    attrs=["bold"],
-                )
-            )
-
-        if hasattr(self, "_shared_hardware_source"):
-            logger.info(colored("Skipping stiff hold prompt (secondary policy)", "yellow"))
-        elif self.config.task.skip_stiff_prompt:
-            # Non-interactive launches (service node, eval) skip the blocking
-            # stdin gate and enter stiff hold immediately (config default True).
-            logger.info(colored("✓ Entering stiff hold mode (skip_stiff_prompt)", "green"))
-        elif sys.stdin.isatty():
-            logger.info(colored("\n⚠️  Ready to enter stiff hold mode", "yellow", attrs=["bold"]))
-            logger.info(colored("Press Enter to continue...", "yellow"))
-            try:
-                input()
-                logger.info(colored("✓ Entering stiff hold mode", "green"))
-            except EOFError:
-                # [drockyd] seems like in some cases, input() will raise EOFError even in interactive mode.
-                _show_warning()
-        else:
-            _show_warning()
+        try:
+            if self.use_sim_time:
+                self.clock_sub.start()
+        except BaseException:
+            self.clock_sub.close()
+            raise
 
     def _get_ref_body_orientation_in_world(self, robot_state_data: LowState):
         # Create configuration for pinocchio robot
@@ -154,11 +140,8 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.onnx_input_names = [inp.name for inp in self.onnx_policy_session.get_inputs()]
         self.onnx_output_names = [out.name for out in self.onnx_policy_session.get_outputs()]
 
-        # Extract KP/KD from ONNX metadata (same as base class)
-        onnx_model = onnx.load(model_path)
-        metadata = {}
-        for prop in onnx_model.metadata_props:
-            metadata[prop.key] = json.loads(prop.value)
+        # Load model-specific metadata and kinematics.
+        metadata = load_metadata(model_path)
 
         # Extract URDF text from ONNX metadata
         assert "robot_urdf" in metadata, "Robot urdf text not found in ONNX metadata"
@@ -178,7 +161,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
             self.motion_command_t, self.ref_quat_xyzw_t = self._target_source.get_target()
         else:
             # Use configured observation dimensions (including history) instead of a hard-coded value.
-            actor_obs_template = self.obs_buf_dict.get("actor_obs")
+            actor_obs_template = self.observations.obs_buf_dict.get("actor_obs")
             if actor_obs_template is None:
                 raise ValueError("Observation group 'actor_obs' must be configured for WBT policy.")
             obs = actor_obs_template.copy()
@@ -188,7 +171,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
             # motion_command_t/ref_quat_xyzw_t will be used in get_current_obs_buffer_dict
             self.motion_command_t = np.concatenate(outputs[0:2], axis=1)  # (1, 58)
             self.ref_quat_xyzw_t = outputs[2]
-        # duplicate, will be used in _get_init_target and _handle_stop_policy
+        # Keep immutable startup targets for subsequent episodes.
         self.motion_command_0 = self.motion_command_t.copy()
         self.ref_quat_xyzw_0 = self.ref_quat_xyzw_t.copy()
 
@@ -201,46 +184,10 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
         self.policy = policy_act
 
-    def _capture_policy_state(self):
-        state = super()._capture_policy_state()
-        state.update(
-            {
-                "motion_command_0": self.motion_command_0.copy(),
-                "ref_quat_xyzw_0": self.ref_quat_xyzw_0.copy(),
-                "per_joint_policy_action_scale": self.per_joint_policy_action_scale.copy()
-                if self.per_joint_policy_action_scale is not None
-                else None,
-            }
-        )
-        return state
-
-    def _restore_policy_state(self, state):
-        super()._restore_policy_state(state)
-        self.motion_command_0 = state["motion_command_0"].copy()
-        self.ref_quat_xyzw_0 = state["ref_quat_xyzw_0"].copy()
-        saved = state["per_joint_policy_action_scale"]
-        self.per_joint_policy_action_scale = saved.copy() if saved is not None else None
-        self.motion_clip_progressing = False
-        self.timestep_util.reset(start_timestep=0)
-        self.curr_motion_timestep = self.timestep_util.timestep
-        self.robot_yaw_offset = 0.0
-        self.motion_yaw_offset = 0.0
-
-    def _on_policy_switched(self, model_path: str):
-        super()._on_policy_switched(model_path)
-        self.motion_clip_progressing = False
-        self.timestep_util.reset(start_timestep=0)
-        self.curr_motion_timestep = self.timestep_util.timestep
-        self._stiff_hold_active = True
-        self.robot_yaw_offset = 0.0
-        self.motion_yaw_offset = 0.0
-        self._startup_interpolator.clear()
-        self._configure_action_scales()
-
-    def get_init_target(self, robot_state_data: LowState):
+    def _initialization_target(self, robot_state_data: LowState):
         """Get initialization target joint positions."""
         dof_pos = robot_state_data.joint_pos
-        if self.get_ready_state:
+        if self._stage == WbtStage.INITIALIZING:
             if self._activation_q is None:
                 raise PolicyRuntimeFault("wbt_startup_pose_unavailable")
             try:
@@ -248,10 +195,9 @@ class WholeBodyTrackingPolicy(BasePolicy):
             except (RuntimeError, ValueError) as error:
                 raise PolicyRuntimeFault(f"wbt_interpolation_failed: {error}") from error
             q_target = interpolation.q_target.reshape(1, -1)
-            self.init_count += 1
             if interpolation.complete:
                 self._activation_q = None
-                self._handle_start_policy(robot_state_data)
+                self._start_tracking(robot_state_data)
                 self.logger.info("WBT initialization complete; policy action enabled")
             return q_target
         return dof_pos
@@ -283,7 +229,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
         current_obs_buffer_dict["dof_vel"] = robot_state_data.joint_vel
 
         # actions
-        current_obs_buffer_dict["actions"] = self.last_policy_action
+        current_obs_buffer_dict["actions"] = self.actions.last
 
         return current_obs_buffer_dict
 
@@ -294,9 +240,9 @@ class WholeBodyTrackingPolicy(BasePolicy):
             self.timestep_util.reset(start_timestep=self.config.task.motion_start_timestep)
             self.curr_motion_timestep = self.timestep_util.timestep
 
-        obs = self.prepare_obs_for_rl(robot_state_data)
+        obs = self.observations.prepare(self.get_current_obs_buffer_dict(robot_state_data))
         if self.config.task.print_observations:
-            self._print_observations(obs)
+            self.observations.print_observations(obs, self.dof_names, self.actions.scaled)
 
         input_feed = {"time_step": np.array([[self.curr_motion_timestep]], dtype=np.float32), "obs": obs["actor_obs"]}
         policy_action, self.motion_command_t, self.ref_quat_xyzw_t = self.policy(input_feed)
@@ -305,20 +251,16 @@ class WholeBodyTrackingPolicy(BasePolicy):
         if self._target_source is not None:
             self.motion_command_t, self.ref_quat_xyzw_t = self._target_source.get_target()
 
-        # clip policy action
-        policy_action = np.clip(policy_action, -100, 100)
-        policy_action = self._mask_policy_action(policy_action)
-        # store last policy action
-        self.last_policy_action = policy_action.copy()
-        # scale policy action
-        if self.per_joint_policy_action_scale is None:
-            self.scaled_policy_action = policy_action * self.policy_action_scale
-        else:
-            self.scaled_policy_action = policy_action * self.per_joint_policy_action_scale
+        scale = (
+            self.config.task.policy_action_scale
+            if self.per_joint_policy_action_scale is None
+            else self.per_joint_policy_action_scale
+        )
+        self.actions.process(policy_action, scale)
         # update motion timestep
         self._set_motion_timestep()
 
-        return self.scaled_policy_action
+        return self.actions.scaled
 
     def _configure_action_scales(self) -> None:
         """Configure action scales, prioritising ONNX metadata over config fallbacks.
@@ -379,17 +321,6 @@ class WholeBodyTrackingPolicy(BasePolicy):
             raise ValueError("ONNX metadata action_scale is empty.")
         return values
 
-    def _get_manual_command(self, robot_state_data):
-        # TODO: instead of adding kp/kd_override in def _set_motor_command,
-        # just use the motor_kp/motor_kd when calling it in _fill_motor_commands
-        if not self._stiff_hold_active:
-            return None
-        return {
-            "q": self._stiff_hold_q.copy(),
-            "kp": self._stiff_hold_kp,
-            "kd": self._stiff_hold_kd,
-        }
-
     def get_reference_state(self) -> np.ndarray | None:
         """Return the current WBT clip target in the normal state-message layout."""
         if self.motion_command_t is None or self.ref_quat_xyzw_t is None:
@@ -399,35 +330,25 @@ class WholeBodyTrackingPolicy(BasePolicy):
         quat_wxyz = xyzw_to_wxyz(quat_xyzw)
         return np.concatenate((np.zeros((1, 3)), quat_wxyz, joint_pos), axis=1)
 
-    def _handle_start_policy(self, robot_state_data: LowState):
-        super()._handle_start_policy(robot_state_data)
-        self._stiff_hold_active = False
+    def _start_tracking(self, robot_state_data: LowState):
+        self._stage = WbtStage.TRACKING
         self._capture_robot_yaw_offset(robot_state_data)
         self._capture_motion_yaw_offset(self.ref_quat_xyzw_0)
         self._handle_start_motion_clip()
 
-    def activate(self, robot_state_data: LowState) -> str | None:
+    def _on_activate(self, robot_state_data: LowState) -> str | None:
         """Start immediately or interpolate to the motion's first pose."""
-        if self.guard:
-            result, reason = self.guard.start_check(robot_state_data)
-            if not result:
-                return reason
-
-        self._init_phase_components()
-        for term_buffers in self.obs_history_buffers.values():
-            for buffer in term_buffers.values():
-                buffer.clear()
-        for observation in self.obs_buf_dict.values():
-            observation.fill(0.0)
+        self.observations.reset()
+        self.actions.reset()
+        self.robot_yaw_offset = 0.0
+        self.motion_yaw_offset = 0.0
         self.motion_command_t = self.motion_command_0.copy()
         self.ref_quat_xyzw_t = self.ref_quat_xyzw_0.copy()
-        self.last_policy_action.fill(0.0)
-        self.scaled_policy_action.fill(0.0)
 
         if self.config.task.startup_mode == "immediate":
             self._activation_q = None
             self._startup_interpolator.clear()
-            self._handle_start_policy(robot_state_data)
+            self._start_tracking(robot_state_data)
             self.logger.info("WBT immediate startup; policy action enabled")
         else:
             self._activation_q = np.asarray(robot_state_data.joint_pos[0], dtype=np.float64).copy()
@@ -440,10 +361,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
                 self._activation_q = None
                 self._startup_interpolator.clear()
                 return f"wbt_start_failed: {error}"
-            self.use_policy_action = True
-            self.get_ready_state = True
-            self.init_count = 0
-            self._stiff_hold_active = False
+            self._stage = WbtStage.INITIALIZING
             self.motion_clip_progressing = False
             self.logger.info(f"WBT initialization started ({self.config.task.init_duration_s:.1f}s)")
         return None
@@ -470,26 +388,33 @@ class WholeBodyTrackingPolicy(BasePolicy):
                     # self.motion_clip_progressing = False
                     self.curr_motion_timestep = end
 
-    def _handle_stop_policy(self):
-        """Handle stop policy action."""
-        self.use_policy_action = False
-        self.get_ready_state = False
-        self._stiff_hold_active = True
-        self.logger.info("Actions set to stiff startup command")
-
+    def _on_deactivate(self):
+        self.observations.reset()
+        self.actions.reset()
+        self._stage = WbtStage.INACTIVE
         self.motion_clip_progressing = False
-        self.timestep_util.reset(start_timestep=0)
+        self.timestep_util.reset(start_timestep=self.config.task.motion_start_timestep)
         self.curr_motion_timestep = self.timestep_util.timestep
-        # When the ending ref differs significantly from the starting ref, returning to the starting ref is not a good way.
-        # self.ref_quat_xyzw_t = self.ref_quat_xyzw_0.copy()
-        # self.motion_command_t = self.motion_command_0.copy()
         self.robot_yaw_offset = 0.0
         self.motion_yaw_offset = 0.0
         self._activation_q = None
         self._startup_interpolator.clear()
 
-    def close(self) -> None:
+    def _on_close(self) -> None:
         self.clock_sub.close()
+
+    def _compute_command(self, robot_state_data):
+        if self._stage == WbtStage.INITIALIZING:
+            with self.latency_tracker.measure(LatencyStage.PREPROCESSING):
+                q_target = self._initialization_target(robot_state_data)
+        else:
+            with self.latency_tracker.measure(LatencyStage.INFERENCE):
+                self.rl_inference(robot_state_data)
+            q_target = self.actions.target(self.default_dof_angles)
+        with self.latency_tracker.measure(LatencyStage.POSTPROCESSING):
+            return position_command(
+                q_target, self.robot_config.motor_kp, self.robot_config.motor_kd, self.controlled_joint_mask
+            )
 
     def _handle_start_motion_clip(self):
         """Handle start motion clip action."""

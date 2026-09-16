@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
-import onnx
 import pinocchio as pin
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -22,9 +20,13 @@ from vex_policy.config.config_types import (
 from vex_policy.policies.guard.waist_locomotion import WaistLocomotionGuard
 from vex_policy.robots import G1_JOINT_LOWER, G1_JOINT_UPPER
 from vex_policy.sdk.base.base_interface import LowState
+from vex_policy.utils.latency import LatencyStage
 from vex_policy.utils.math.quat import quat_rotate_inverse
 
-from .base import BasePolicy
+from .base import BasePolicy, PolicyRuntimeFault
+from .inference import OnnxActor, resolve_control_gains
+from .joint_command import PositionAction, position_command
+from .observations import ObservationHistory, robot_observation_terms
 
 
 class WaistInitialPose(BaseModel):
@@ -174,10 +176,26 @@ class WaistLocomotionPolicy(BasePolicy):
         self.waist_task = config.task
         self.initial_pose = load_waist_motion_last_pose(self.waist_task.motion_data_path)
         super().__init__(config)
+        self._load_initial_joint_pose()
+        self.observations = ObservationHistory(config.observation)
+        self._validate_observations()
+        if not config.task.use_phase:
+            raise ValueError("Waist locomotion requires task.use_phase=true")
+        self.actor = OnnxActor(config.task.model_path)
+        self._validate_model()
+        self.robot_config = resolve_control_gains(
+            config.robot, self.actor.metadata.get("kp"), self.actor.metadata.get("kd")
+        )
+        self.actions = PositionAction(
+            self.num_dofs,
+            self.action_mask,
+            require_full_body=config.action_mask is not None,
+            force_zero=config.task.debug.force_zero_action,
+        )
+        self._init_commands()
         self.guard = WaistLocomotionGuard(config.guard, self)
 
-    def _init_robot_config(self, robot_config) -> None:
-        super()._init_robot_config(robot_config)
+    def _load_initial_joint_pose(self) -> None:
         source_names = self.initial_pose.dof_names
         expected_names = tuple(self.dof_names)
         missing = sorted(set(expected_names) - set(source_names))
@@ -188,63 +206,33 @@ class WaistLocomotionPolicy(BasePolicy):
         hardware_order = [source_indices[name] for name in expected_names]
         self.default_dof_angles = np.asarray(self.initial_pose.dof_pos, dtype=np.float64)[hardware_order]
 
-    def _init_obs_config(self) -> None:
-        super()._init_obs_config()
-        actor_terms = self.obs_terms_sorted.get("actor_obs")
+    def _validate_observations(self) -> None:
+        actor_terms = self.observations.obs_terms_sorted.get("actor_obs")
         expected_terms = sorted(self._OBS_DIMS)
         if actor_terms != expected_terms:
             raise ValueError(f"Waist locomotion actor_obs terms must be {expected_terms}, got {actor_terms}")
-        if self.history_length_dict.get("actor_obs", 1) != 1:
+        if self.observations.history_length_dict.get("actor_obs", 1) != 1:
             raise ValueError("Waist locomotion actor_obs history length must be 1")
         for term, expected_dim in self._OBS_DIMS.items():
-            actual_dim = self.obs_dims.get(term)
+            actual_dim = self.observations.obs_dims.get(term)
             if actual_dim != expected_dim:
                 raise ValueError(f"Waist locomotion observation {term!r} must have dimension {expected_dim}")
-            actual_scale = self.obs_scales.get(term)
+            actual_scale = self.observations.obs_scales.get(term)
             if actual_scale is None or not np.isclose(actual_scale, self._OBS_SCALES[term]):
                 raise ValueError(f"Waist locomotion observation {term!r} must use scale {self._OBS_SCALES[term]}")
-        if self.obs_dim_dict["actor_obs"] != 105:
+        if self.observations.obs_dim_dict["actor_obs"] != 105:
             raise ValueError("Waist locomotion actor_obs must have dimension 105")
 
-    def _init_command_components(self) -> None:
-        super()._init_command_components()
+    def _init_commands(self) -> None:
         self.pelvis_sine_phase = 0.0
         self.pelvis_sine_command = np.zeros((1, 8), dtype=np.float32)
         self.pelvis_orientation_reference_quat: np.ndarray | None = None
         self.initial_base_right_foot_height_difference: float | None = None
         self._reset_pelvis_sine_command()
 
-    def _init_phase_components(self) -> None:
-        self.use_phase = self.config.task.use_phase
-        if not self.use_phase:
-            raise ValueError("Waist locomotion requires task.use_phase=true")
-
-    def _reset_inference_episode_state(self) -> None:
-        """Remove action and observation state carried over from a prior activation."""
-
-        self.last_policy_action.fill(0.0)
-        self.scaled_policy_action.fill(0.0)
-        for group_buffers in self.obs_history_buffers.values():
-            for buffer in group_buffers.values():
-                buffer.clear()
-        self.obs_buf_dict = {group: np.zeros_like(buffer) for group, buffer in self.obs_buf_dict.items()}
-
-    def rl_inference(self, robot_state_data: LowState) -> np.ndarray:
-        """Run inference and keep the resulting position target within joint limits."""
-
-        scaled_policy_action = super().rl_inference(robot_state_data)
-        q_target = np.clip(
-            self.default_dof_angles + scaled_policy_action,
-            G1_JOINT_LOWER,
-            G1_JOINT_UPPER,
-        )
-        self.scaled_policy_action = q_target - self.default_dof_angles
-        return self.scaled_policy_action
-
-    def setup_policy(self, model_path) -> None:
-        super().setup_policy(model_path)
-        inputs = self.onnx_policy_session.get_inputs()
-        outputs = self.onnx_policy_session.get_outputs()
+    def _validate_model(self) -> None:
+        inputs = self.actor.session.get_inputs()
+        outputs = self.actor.session.get_outputs()
         if len(inputs) != 1 or inputs[0].name != "actor_obs" or list(inputs[0].shape) != [1, 105]:
             exposed = [(item.name, item.shape) for item in inputs]
             raise ValueError(f"Waist locomotion model must expose actor_obs[1, 105], got {exposed}")
@@ -252,8 +240,7 @@ class WaistLocomotionPolicy(BasePolicy):
             exposed = [(item.name, item.shape) for item in outputs]
             raise ValueError(f"Waist locomotion model must expose action[1, 29], got {exposed}")
 
-        model = onnx.load(model_path, load_external_data=False)
-        metadata = {prop.key: json.loads(prop.value) for prop in model.metadata_props}
+        metadata = self.actor.metadata
         model_dof_names = tuple(metadata.get("dof_names", ()))
         if model_dof_names != tuple(self.dof_names):
             raise ValueError("Waist locomotion ONNX dof_names do not match the robot joint order")
@@ -292,25 +279,6 @@ class WaistLocomotionPolicy(BasePolicy):
         self._kinematics_q_indices = np.asarray(q_indices, dtype=np.int64)
         self._right_ankle_frame_id = ankle_frame_id
 
-    def _capture_policy_state(self) -> dict:
-        state = super()._capture_policy_state()
-        state.update(
-            {
-                "kinematics_model": self._kinematics_model,
-                "kinematics_data": self._kinematics_data,
-                "kinematics_q_indices": self._kinematics_q_indices,
-                "right_ankle_frame_id": self._right_ankle_frame_id,
-            }
-        )
-        return state
-
-    def _restore_policy_state(self, state: dict) -> None:
-        super()._restore_policy_state(state)
-        self._kinematics_model = state["kinematics_model"]
-        self._kinematics_data = state["kinematics_data"]
-        self._kinematics_q_indices = state["kinematics_q_indices"]
-        self._right_ankle_frame_id = state["right_ankle_frame_id"]
-
     def _reset_pelvis_sine_command(self) -> None:
         self.pelvis_sine_phase = 0.0
         direction = np.asarray(
@@ -328,20 +296,20 @@ class WaistLocomotionPolicy(BasePolicy):
             initial_height + self.waist_input_parameters["height_delta"].default,
         )
 
-    def _handle_start_policy(self, robot_state_data: LowState) -> None:
+    def _on_activate(self, robot_state_data: LowState) -> None:
         reference_quat = np.asarray(robot_state_data.base_quat, dtype=np.float64).copy()
         reference_norm = np.linalg.norm(reference_quat, axis=1, keepdims=True)
         if not np.isfinite(reference_quat).all() or np.any(reference_norm < 1e-8):
-            raise RuntimeError("Cannot capture pelvis orientation from an invalid quaternion")
+            raise PolicyRuntimeFault("Cannot capture pelvis orientation from an invalid quaternion")
         self.pelvis_orientation_reference_quat = reference_quat / reference_norm
-        base_observations = super().get_current_obs_buffer_dict(robot_state_data)
+        base_observations = robot_observation_terms(robot_state_data, self.default_dof_angles, self.config.task.debug)
         initial_height = self._base_right_foot_height_difference(
             robot_state_data, base_observations["projected_gravity"]
         )
         self.initial_base_right_foot_height_difference = float(initial_height[0, 0])
-        self._reset_inference_episode_state()
+        self.actions.reset()
+        self.observations.reset()
         self._reset_pelvis_sine_command()
-        super()._handle_start_policy(robot_state_data)
 
     def update_phase_time(self) -> None:
         frequency_hz = float(self.pelvis_sine_command[0, 3])
@@ -350,7 +318,7 @@ class WaistLocomotionPolicy(BasePolicy):
         self.pelvis_sine_command[0, 0] = np.sin(self.pelvis_sine_phase)
         self.pelvis_sine_command[0, 1] = np.cos(self.pelvis_sine_phase)
 
-    def apply_control(self, control: Mapping[str, float]) -> None:
+    def _apply_control(self, control: Mapping[str, float]) -> None:
         amplitude = float(control["amplitude"])
         frequency = float(control["frequency"])
         direction = np.asarray([control["x"], control["y"], control["z"]], dtype=np.float32)
@@ -393,8 +361,8 @@ class WaistLocomotionPolicy(BasePolicy):
         return np.asarray([[np.dot(gravity_b[0], ankle_position_b)]], dtype=np.float64)
 
     def get_current_obs_buffer_dict(self, robot_state_data: LowState):
-        observations = super().get_current_obs_buffer_dict(robot_state_data)
-        observations["actions"] = self.last_policy_action
+        observations = robot_observation_terms(robot_state_data, self.default_dof_angles, self.config.task.debug)
+        observations["actions"] = self.actions.last
         observations["base_right_foot_height_difference"] = self._base_right_foot_height_difference(
             robot_state_data, observations["projected_gravity"]
         )
@@ -406,3 +374,26 @@ class WaistLocomotionPolicy(BasePolicy):
         observations["pelvis_orientation_error"] = _relative_rotation_vector(reference_quat, current_quat)
         observations["pelvis_sine_command"] = self.pelvis_sine_command
         return observations
+
+    def _on_deactivate(self):
+        self.observations.reset()
+        self.actions.reset()
+        self.pelvis_orientation_reference_quat = None
+        self.initial_base_right_foot_height_difference = None
+        self._reset_pelvis_sine_command()
+
+    def _compute_command(self, robot_state_data):
+        with self.latency_tracker.measure(LatencyStage.PREPROCESSING):
+            self.update_phase_time()
+            obs = self.observations.prepare(self.get_current_obs_buffer_dict(robot_state_data))
+            if self.config.task.print_observations:
+                self.observations.print_observations(obs, self.dof_names, self.actions.scaled)
+        with self.latency_tracker.measure(LatencyStage.INFERENCE):
+            action = self.actor({"actor_obs": obs["actor_obs"]})
+        with self.latency_tracker.measure(LatencyStage.POSTPROCESSING):
+            self.actions.process(action, self.config.task.policy_action_scale)
+            q_target = np.clip(self.actions.target(self.default_dof_angles), G1_JOINT_LOWER, G1_JOINT_UPPER)
+            self.actions.scaled = q_target - self.default_dof_angles
+            return position_command(
+                q_target, self.robot_config.motor_kp, self.robot_config.motor_kd, self.controlled_joint_mask
+            )
