@@ -103,6 +103,23 @@ class WaistLocomotionTaskConfig(TaskConfig):
             raise ValueError("motion_data_path must not be empty")
 
 
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class PassiveLocomotionTaskConfig:
+    """Deployment contract for the 20-frame passive G1 actor."""
+
+    model_path: str = Field(min_length=1)
+    motion_data_path: str = Field(min_length=1)
+    action_mask_path: None = None
+    rl_rate: Literal[50.0] = 50.0
+    policy_action_scale: Literal[0.25] = 0.25
+    print_observations: bool = False
+    debug: DebugConfig = DebugConfig()
+
+    def __post_init__(self) -> None:
+        if not self.model_path.strip() or not self.motion_data_path.strip():
+            raise ValueError("model_path and motion_data_path must not be empty")
+
+
 class UfoContextBase(BaseModel):
     """Strict local latent-context configuration for a UFO policy."""
 

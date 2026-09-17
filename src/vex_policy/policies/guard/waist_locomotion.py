@@ -14,6 +14,8 @@ from .base import BaseGuard
 class WaistLocomotionGuard(BaseGuard):
     """Require the robot to match the motion's final pose before inference."""
 
+    reason_prefix = "waist_locomotion_start_check_failed"
+
     def __init__(self, config: WaistLocomotionGuardConfig, policy):
         super().__init__(config, policy)
         self.config = config
@@ -36,13 +38,13 @@ class WaistLocomotionGuard(BaseGuard):
     def start_check(self, robot_state_data: LowState) -> tuple[bool, str | None]:
         joint_pos = robot_state_data.joint_pos[0]
         if not np.isfinite(joint_pos).all():
-            return self._fail("waist_locomotion_start_check_failed: invalid_joint_position")
+            return self._fail(f"{self.reason_prefix}: invalid_joint_position")
         joint_errors = np.abs(joint_pos - self.policy.default_dof_angles)
         worst_index = int(np.argmax(joint_errors))
         worst_error = float(joint_errors[worst_index])
         if worst_error > self.config.startup_joint_tolerance_rad:
             return self._fail(
-                "waist_locomotion_start_check_failed: "
+                f"{self.reason_prefix}: "
                 f"{self.policy.dof_names[worst_index]} error={worst_error:.3f}rad "
                 f"> {self.config.startup_joint_tolerance_rad:.3f}rad"
             )
@@ -50,12 +52,12 @@ class WaistLocomotionGuard(BaseGuard):
         try:
             current_gravity = self._current_projected_gravity(robot_state_data)
         except ValueError as error:
-            return self._fail(f"waist_locomotion_start_check_failed: {error}")
+            return self._fail(f"{self.reason_prefix}: {error}")
         expected_gravity = np.asarray(self.policy.initial_pose.projected_gravity, dtype=np.float64)
         gravity_error = float(np.linalg.norm(current_gravity - expected_gravity))
         if gravity_error > self.config.startup_gravity_tolerance:
             return self._fail(
-                "waist_locomotion_start_check_failed: "
+                f"{self.reason_prefix}: "
                 f"projected_gravity error={gravity_error:.3f} > {self.config.startup_gravity_tolerance:.3f}"
             )
         return True, None

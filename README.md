@@ -234,6 +234,50 @@ MQTT 参数。`pelvis_orientation_error` 以每次策略成功启动时机器人
 模型；独立示例见 `configs/examples/g1_waist_locomotion_lite.yaml`，可用
 `vex-policy --config configs/examples/g1_waist_locomotion_lite.yaml` 启动。
 
+## Passive locomotion
+
+Holosoma `passive_waist_loco` 分支的 `exp:g1-29dof` 使用独立的
+`implementation: passive_locomotion`。完整示例为
+`configs/g1/g1_passive_locomotion.yaml`，不会被默认 `configs/g1` 加载。
+将该实验导出的 ONNX 放到 `models/loco/g1_29dof/ppo_g1_passive.onnx` 后运行：
+
+```bash
+uv run vex-policy --policy-config configs/examples/g1_passive_locomotion.yaml --interface eth0
+```
+
+模型必须提供 float32 `actor_obs[1,1960] → action[1,29]`，并包含 `dof_names`、
+`action_scale`、`robot_urdf` 和 KP/KD 元数据。历史力估计器已包含在 ONNX 内，无需独立
+encoder、外部力传感器输入或训练用的 `force_target`。旧的 100/102/105 维模型不能用于该示例。
+模型权重不随适配代码提供。
+
+策略以 50 Hz 保存 20 帧历史。七项观测按字母排序，每项内部按从旧到新排列：
+`actions(29)`、`base_ang_vel(3)`、`base_right_foot_height_difference(1)`、`dof_pos(29)`、
+`dof_vel(29)`、`passive_command(4)`、`projected_gravity(3)`。角速度缩放为 0.25，关节速度
+缩放为 0.05，其余为 1。每次激活清空历史并在前端补零，不重复填充当前帧。
+
+四个滑条直接形成 `[down_vel, up_vel, target_height, min_height]`，无相位或高度偏移：
+
+| 参数 | 含义 | 范围 | 默认值 |
+| --- | --- | --- | --- |
+| `down_vel` | 下压速度，m/s | 0.01–0.05 | 0.03 |
+| `up_vel` | 回升速度，m/s | 0.01–0.10 | 0.055 |
+| `target_height` | pelvis link 原点的恢复目标世界高度，m | 0.15–0.40 | 0.275 |
+| `min_height` | pelvis link 原点的最低世界高度，m | 0.05–0.15 | 0.10 |
+
+命令中的高度是训练定义的世界高度；高度 observation 则是基座相对右脚踝的高度差，由
+ONNX 内嵌 URDF 的 FK 和 IMU 投影重力计算。URDF 中的 `hip_bar_yaw_joint`、
+`hip_bar_pitch_joint` 保持零位，不进入 29 维观测关节或输出动作。
+
+示例 `motion_data_path` 指向上游现有的 `ridding1.npz`，与 `model_path` 一样相对启动工作目录
+解析。**必须使用该模型训练时 `--robot.init-state.initial-pose-file` 对应的同一姿态文件**。
+读取 NPZ 最后一帧，按 `joint_names` 重排关节，作为动作残差零位；根姿态采用 `[xyz,wxyz]`。
+激活前必须先到达该参考姿态，关节最大误差默认不超过 0.2 rad，投影重力向量误差默认不超过
+0.2，均由顶层 `guard` 配置。检查通过后直接推理，不自动插值。
+
+动作历史保留裁剪前模型输出；下发位置使用动作裁剪至 `[-100,100]` 后乘 0.25，再叠加参考姿态
+并限制到 G1 关节范围。该类型仅支持 `full_body`，不接受 action mask。运行中非法状态、观测、
+动作或推理错误会触发现有全局锁存，本周期不写入机器人命令。
+
 ## Enhanced inputs
 
 每个 policy 的 `inputs` 是有序的 UI 组件数组，控制面板按 `type` 自动渲染。`joystick` 同时声明明确的

@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from vex_policy.policies.base import PolicyJointCommand, PolicyRuntimeFault
-from vex_policy.policies.policy_state_machine import PolicyStateMachine
+from vex_policy.policies.policy_state_machine import PolicyState, PolicyStateMachine
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.sdk.interface_manager import InterfaceManager
 
@@ -119,7 +119,7 @@ def _state_machine(manager, lower, upper) -> PolicyStateMachine:
     machine._started_at = 0.0
     machine._state_period = 0.02
     machine._next_state_publish = 0.0
-    machine.state = "running"
+    machine.state = PolicyState.RUNNING
     machine.active_policy = ("lower", "upper")
     machine.requested_policy = ()
     machine.reason = None
@@ -195,7 +195,7 @@ def test_activation_reuses_the_tick_state_snapshot():
     lower = _ParallelPolicy(barrier, _command([1, 99, 99], [True, False, False], 10))
     upper = _ParallelPolicy(barrier, _command([88, 2, 3], [False, True, True], 20))
     machine = _state_machine(manager, lower, upper)
-    machine.state = "idle"
+    machine.state = PolicyState.IDLE
     machine.active_policy = ()
     control = SimpleNamespace(
         policy=("upper", "lower"),
@@ -242,7 +242,7 @@ def test_policy_runtime_fault_latches_without_writing_command():
     finally:
         machine._policy_executor.shutdown(wait=True)
 
-    assert machine.state == "latched"
+    assert machine.state is PolicyState.LATCHED
     assert machine.active_policy == ()
     assert machine.reason == "policy_fault:lower:invalid_action"
     assert not backend.commands
@@ -273,7 +273,7 @@ def test_activation_failure_rolls_back_new_and_retained_policies(failure, retain
                 machine._activate(("lower", "upper"), robot_state)
         else:
             machine._activate(("lower", "upper"), robot_state)
-        assert machine.state == "latched"
+        assert machine.state is PolicyState.LATCHED
         assert machine.active_policy == ()
         assert set(events) == {"lower_stopped", "upper_stopped"}
         assert lower.activated == ([] if retain_lower else [robot_state])
@@ -298,7 +298,7 @@ def test_successful_pair_change_does_not_restart_retained_policy():
         assert lower.activated == []
         assert upper.activated == [robot_state]
         assert machine.active_policy == ("lower", "upper")
-        assert machine.state == "running"
+        assert machine.state is PolicyState.RUNNING
     finally:
         machine._policy_executor.shutdown(wait=True)
 
@@ -348,7 +348,7 @@ def test_parallel_fault_waits_for_sibling_before_deactivation():
                 finish.set()
             result.result()
         assert deactivated.is_set()
-        assert machine.state == "latched"
+        assert machine.state is PolicyState.LATCHED
         assert not backend.commands
     finally:
         finish.set()

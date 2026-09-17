@@ -58,6 +58,7 @@ locomotion = "vex_policy.policies.locomotion:LocomotionPolicy"
 wbt = "vex_policy.policies.wbt:WholeBodyTrackingPolicy"
 sonic = "vex_policy.policies.sonic:SonicPolicy"
 ufo = "vex_policy.policies.ufo:UfoPolicy"
+passive_locomotion = "vex_policy.policies.passive_locomotion:PassiveLocomotionPolicy"
 waist_locomotion = "vex_policy.policies.waist_locomotion:WaistLocomotionPolicy"
 
 [tool.setuptools.packages.find]

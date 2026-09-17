@@ -7,12 +7,13 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .control import PolicyInput, input_parameters
-from .GuardConfig import GuardConfig, UfoGuardConfig, WaistLocomotionGuardConfig
+from .GuardConfig import GuardConfig, PassiveLocomotionGuardConfig, UfoGuardConfig, WaistLocomotionGuardConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
 from .task import (
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
+    PassiveLocomotionTaskConfig,
     SonicTaskConfig,
     TaskConfig,
     UfoTaskConfig,
@@ -76,8 +77,9 @@ class PolicySpec(StrictModel):
         | HoldPositionTaskConfig
         | InterpolationTaskConfig
         | UfoTaskConfig
+        | PassiveLocomotionTaskConfig
     )
-    guard: GuardConfig | WaistLocomotionGuardConfig | UfoGuardConfig | None = None
+    guard: GuardConfig | WaistLocomotionGuardConfig | UfoGuardConfig | PassiveLocomotionGuardConfig | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -90,6 +92,7 @@ class PolicySpec(StrictModel):
             "sonic": SonicTaskConfig,
             "ufo": UfoTaskConfig,
             "waist_locomotion": WaistLocomotionTaskConfig,
+            "passive_locomotion": PassiveLocomotionTaskConfig,
             "wbt": WbtTaskConfig,
         }
         implementation = value.get("implementation")
@@ -98,6 +101,7 @@ class PolicySpec(StrictModel):
         guard_types = {
             "ufo": UfoGuardConfig,
             "waist_locomotion": WaistLocomotionGuardConfig,
+            "passive_locomotion": PassiveLocomotionGuardConfig,
         }
         if isinstance(value.get("guard"), dict) and implementation in guard_types:
             selected["guard"] = guard_types[implementation](**value["guard"])

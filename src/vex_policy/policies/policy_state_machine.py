@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
+from enum import StrEnum
 from typing import Any
 
 import numpy as np
@@ -17,6 +18,7 @@ from vex_policy.policies.base import BasePolicy, PolicyRuntimeFault
 from vex_policy.policies.hold_position import HoldPositionPolicy
 from vex_policy.policies.interpolation import InterpolationPolicy
 from vex_policy.policies.locomotion import LocomotionPolicy
+from vex_policy.policies.passive_locomotion import PassiveLocomotionPolicy
 from vex_policy.policies.sonic import SonicPolicy
 from vex_policy.policies.ufo import UfoPolicy
 from vex_policy.policies.waist_locomotion import WaistLocomotionPolicy
@@ -42,9 +44,19 @@ def _policy_class(kind: str) -> type[BasePolicy]:
         return SonicPolicy
     if kind == "ufo":
         return UfoPolicy
+    if kind == "passive_locomotion":
+        return PassiveLocomotionPolicy
     if kind == "waist_locomotion":
         return WaistLocomotionPolicy
     raise ValueError(f"Unknown policy kind: {kind}")
+
+
+class PolicyState(StrEnum):
+    STARTUP_LATCHED = "startup_latched"
+    LATCHED = "latched"
+    IDLE = "idle"
+    SWITCHING = "switching"
+    RUNNING = "running"
 
 
 class PolicyStateMachine:
@@ -86,7 +98,7 @@ class PolicyStateMachine:
             self.rate = RateLimiter(rate)
             self._state_period = 1.0 / runtime.mqtt.state_frequency_hz
             self._next_state_publish = self._started_at
-            self.state = "startup_latched"
+            self.state: PolicyState = PolicyState.STARTUP_LATCHED
             self.active_policy: tuple[str, ...] = ()
             self.requested_policy: tuple[str, ...] = ()
             self.reason: str | None = "startup"
@@ -125,7 +137,7 @@ class PolicyStateMachine:
 
     def _status_payload(self) -> dict[str, Any]:
         return {
-            "state": self.state,
+            "state": self.state.value,
             "active_policy": list(self.active_policy),
             "requested_policy": list(self.requested_policy),
             "reason": self.reason,
@@ -156,7 +168,7 @@ class PolicyStateMachine:
 
     def _latch(self, reason: str) -> None:
         self._deactivate()
-        self.state = "latched"
+        self.state = PolicyState.LATCHED
         self.reason = reason
 
     def _selection_key(self, name: str) -> tuple[int, str]:
@@ -168,7 +180,7 @@ class PolicyStateMachine:
 
     def _activate(self, names: tuple[str, ...], robot_state: LowState) -> None:
         names = self._canonical_selection(names)
-        self.state = "switching"
+        self.state = PolicyState.SWITCHING
         self.reason = None
         self._publish_status()
 
@@ -188,14 +200,14 @@ class PolicyStateMachine:
                 reason = self.policies[name].activate(robot_state)
                 if reason is not None:
                     self.active_policy = ()
-                    self.state = "latched"
+                    self.state = PolicyState.LATCHED
                     self.reason = reason
                     self._stop_policies(live)
                     self._publish_status()
                     return
         except BaseException as error:
             self.active_policy = ()
-            self.state = "latched"
+            self.state = PolicyState.LATCHED
             self.reason = f"policy_fault:{'+'.join(names)}:{error}"
             try:
                 self._stop_policies(live)
@@ -207,7 +219,7 @@ class PolicyStateMachine:
             raise
 
         self.active_policy = names
-        self.state = "running"
+        self.state = PolicyState.RUNNING
 
     def _maybe_publish_state(self, robot_state, now: float | None = None) -> None:
         current = self._clock() if now is None else now
@@ -267,9 +279,9 @@ class PolicyStateMachine:
             self._publish_status()
             return
 
-        if self.state in {"startup_latched", "latched"}:
+        if self.state in {PolicyState.STARTUP_LATCHED, PolicyState.LATCHED}:
             if not control.policy:
-                self.state = "idle"
+                self.state = PolicyState.IDLE
                 self.reason = None
             self._publish_idle_state(robot_state, current)
             self._publish_status()
@@ -277,7 +289,7 @@ class PolicyStateMachine:
 
         if not control.policy:
             self._deactivate()
-            self.state = "idle"
+            self.state = PolicyState.IDLE
             self.reason = None
             self._publish_idle_state(robot_state, current)
             self._publish_status()
@@ -314,7 +326,7 @@ class PolicyStateMachine:
             self._publish_idle_state(robot_state, current)
             self._publish_status()
             return
-        self.state = "running"
+        self.state = PolicyState.RUNNING
         self.reason = None
         self._publish_status()
 
@@ -380,4 +392,4 @@ class PolicyStateMachine:
         self._maybe_publish_state(robot_state)
 
 
-__all__ = ["PolicyStateMachine"]
+__all__ = ["PolicyState", "PolicyStateMachine"]

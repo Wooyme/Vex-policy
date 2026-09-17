@@ -1,0 +1,70 @@
+name: g1-passive-locomotion
+implementation: passive_locomotion
+type: full_body
+inputs:
+  - type: slider
+    parameter:
+      name: down_vel
+      min: 0.01
+      max: 0.05
+      default: 0.03
+  - type: slider
+    parameter:
+      name: up_vel
+      min: 0.01
+      max: 0.1
+      default: 0.01
+  - type: slider
+    parameter:
+      name: target_height
+      min: 0.0
+      max: 0.4
+      default: 0.25
+  - type: slider
+    parameter:
+      name: min_height
+      min: 0.05
+      max: 0.15
+      default: 0.06
+observation:
+  obs_dict:
+    actor_obs:
+      - actions
+      - base_ang_vel
+      - base_right_foot_height_difference
+      - dof_pos
+      - dof_vel
+      - passive_command
+      - projected_gravity
+  obs_dims:
+    actions: 29
+    base_ang_vel: 3
+    base_right_foot_height_difference: 1
+    dof_pos: 29
+    dof_vel: 29
+    passive_command: 4
+    projected_gravity: 3
+  obs_scales:
+    actions: 1.0
+    base_ang_vel: 0.25
+    base_right_foot_height_difference: 1.0
+    dof_pos: 1.0
+    dof_vel: 0.05
+    passive_command: 1.0
+    projected_gravity: 1.0
+  history_length_dict:
+    actor_obs: 20
+task:
+  model_path: models/loco/g1_29dof/ppo_passive_ridding1.onnx
+  motion_data_path: reference/ridding1.npz
+  action_mask_path: null
+  rl_rate: 50.0
+  policy_action_scale: 0.25
+  print_observations: false
+  debug:
+    force_upright_imu: false
+    force_zero_angular_velocity: false
+    force_zero_action: false
+guard:
+  startup_joint_tolerance_rad: 1.0
+  startup_gravity_tolerance: 1.0

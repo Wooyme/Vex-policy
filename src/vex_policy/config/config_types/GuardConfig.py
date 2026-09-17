@@ -25,6 +25,11 @@ class WaistLocomotionGuardConfig:
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class PassiveLocomotionGuardConfig(WaistLocomotionGuardConfig):
+    """Startup pose thresholds for passive locomotion."""
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class UfoGuardConfig:
     """Startup pose thresholds for UFO policies."""
 

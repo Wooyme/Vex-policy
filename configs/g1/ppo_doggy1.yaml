@@ -3,7 +3,7 @@ implementation: waist_locomotion
 type: full_body
 inputs:
 - type: slider
-  parameter: {name: amplitude, min: 0.05, max: 0.5, default: 0.05}
+  parameter: {name: amplitude, min: 0.05, max: 0.2, default: 0.05}
 - type: slider
   parameter: {name: frequency, min: 0.2, max: 2.0, default: 1.1}
 - type: slider

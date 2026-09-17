@@ -5,12 +5,13 @@ from pydantic.dataclasses import dataclass
 
 from .action_mask import ActionMaskConfig
 from .control import PolicyInput
-from .GuardConfig import GuardConfig, UfoGuardConfig, WaistLocomotionGuardConfig
+from .GuardConfig import GuardConfig, PassiveLocomotionGuardConfig, UfoGuardConfig, WaistLocomotionGuardConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
 from .task import (
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
+    PassiveLocomotionTaskConfig,
     SonicTaskConfig,
     TaskConfig,
     UfoTaskConfig,
@@ -32,6 +33,7 @@ class InferenceConfig:
         | HoldPositionTaskConfig
         | InterpolationTaskConfig
         | UfoTaskConfig
+        | PassiveLocomotionTaskConfig
     )
-    guard: GuardConfig | WaistLocomotionGuardConfig | UfoGuardConfig | None = None
+    guard: GuardConfig | WaistLocomotionGuardConfig | UfoGuardConfig | PassiveLocomotionGuardConfig | None = None
     action_mask: ActionMaskConfig | None = None

@@ -2,7 +2,7 @@
 
 from .action_mask import ActionMaskConfig
 from .control import InputParameter, JoystickInput, PolicyInput, SliderInput, input_parameters
-from .GuardConfig import GuardConfig, UfoGuardConfig, WaistLocomotionGuardConfig
+from .GuardConfig import GuardConfig, PassiveLocomotionGuardConfig, UfoGuardConfig, WaistLocomotionGuardConfig
 from .inference import InferenceConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
@@ -17,6 +17,7 @@ from .task import (
     DebugConfig,
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
+    PassiveLocomotionTaskConfig,
     SonicTaskConfig,
     TaskConfig,
     UfoContextConfig,
@@ -39,6 +40,8 @@ __all__ = [
     "JoystickInput",
     "MqttConfig",
     "ObservationConfig",
+    "PassiveLocomotionGuardConfig",
+    "PassiveLocomotionTaskConfig",
     "PolicyInput",
     "PolicySpec",
     "PolicyType",

@@ -13,6 +13,8 @@ from vex_policy.config.config_types import (
     InferenceConfig,
     InterpolationTaskConfig,
     MqttConfig,
+    PassiveLocomotionGuardConfig,
+    PassiveLocomotionTaskConfig,
     PolicySpec,
     RobotRuntimeConfig,
     RuntimeConfig,
@@ -113,6 +115,14 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             if spec.task.action_mask_path is not None:
                 raise ValueError(f"UFO policy {spec.name!r} does not support action masks")
             path_fields.append("model_config")
+        if spec.implementation == "passive_locomotion":
+            if not isinstance(spec.task, PassiveLocomotionTaskConfig):
+                raise ValueError(f"Policy {spec.name!r} requires PassiveLocomotionTaskConfig")
+            if not isinstance(spec.guard, PassiveLocomotionGuardConfig):
+                raise ValueError(f"Policy {spec.name!r} requires PassiveLocomotionGuardConfig")
+            if spec.type != "full_body" or spec.task.action_mask_path is not None:
+                raise ValueError(f"Passive locomotion policy {spec.name!r} requires full_body without action masks")
+            path_fields.append("motion_data_path")
         resolved_paths: dict[str, str] = {}
         for field_name in path_fields:
             model_path = getattr(spec.task, field_name, None)
@@ -123,7 +133,7 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             candidate = Path(model_path).expanduser().resolve()
             if not candidate.is_file():
                 raise ValueError(f"Policy {spec.name!r} model file does not exist: {candidate}")
-            if spec.implementation == "interpolation" and candidate.suffix.lower() != ".npz":
+            if field_name == "motion_data_path" and candidate.suffix.lower() != ".npz":
                 raise ValueError(f"Policy {spec.name!r} motion_data_path must reference an NPZ file")
             resolved_paths[field_name] = str(candidate)
         if isinstance(spec.task, UfoTaskConfig):
