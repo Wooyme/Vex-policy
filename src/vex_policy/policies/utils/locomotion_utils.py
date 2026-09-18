@@ -6,41 +6,13 @@ from pathlib import Path
 
 import numpy as np
 import pinocchio as pin
-from pydantic import BaseModel, ConfigDict, model_validator
 
 from vex_policy.sdk.base.base_interface import LowState
-from vex_policy.utils.math.quat import quat_rotate_inverse
+
+from .initial_pose import InitialPose
 
 
-class MotionInitialPose(BaseModel):
-    """Minimal training-pose data needed by inference and its startup guard."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    dof_names: tuple[str, ...]
-    dof_pos: tuple[float, ...]
-    root_quat_wxyz: tuple[float, float, float, float]
-    projected_gravity: tuple[float, float, float]
-
-    @model_validator(mode="after")
-    def validate_values(self) -> MotionInitialPose:
-        if not self.dof_names or len(self.dof_names) != len(self.dof_pos):
-            raise ValueError("dof_names and dof_pos must have the same non-zero length")
-        if len(set(self.dof_names)) != len(self.dof_names):
-            raise ValueError("dof_names must not contain duplicates")
-        values = np.asarray((*self.dof_pos, *self.root_quat_wxyz, *self.projected_gravity), dtype=np.float64)
-        if not np.isfinite(values).all():
-            raise ValueError("initial pose values must be finite")
-        quaternion_norm = float(np.linalg.norm(self.root_quat_wxyz))
-        if not np.isclose(quaternion_norm, 1.0, atol=1e-3):
-            raise ValueError("root_quat_wxyz must be a unit quaternion")
-        gravity_norm = float(np.linalg.norm(self.projected_gravity))
-        if not np.isclose(gravity_norm, 1.0, atol=1e-3):
-            raise ValueError("projected_gravity must be a unit vector")
-        return self
-
-
-def load_motion_last_pose(path: str | Path) -> MotionInitialPose:
+def load_motion_last_pose(path: str | Path) -> InitialPose:
     """Load and validate the final root/joint pose from a Holosoma motion NPZ."""
     motion_path = Path(path)
     if not motion_path.is_file():
@@ -64,16 +36,10 @@ def load_motion_last_pose(path: str | Path) -> MotionInitialPose:
         )
     final_pose = joint_pos[-1]
     root_quat_wxyz = final_pose[3:7]
-    quaternion_norm = float(np.linalg.norm(root_quat_wxyz))
-    if not np.isfinite(quaternion_norm) or quaternion_norm < 1e-8:
-        raise ValueError("Locomotion final-frame root quaternion is invalid")
-    root_quat_wxyz = (root_quat_wxyz / quaternion_norm).reshape(1, 4)
-    projected_gravity = quat_rotate_inverse(root_quat_wxyz, np.asarray([[0.0, 0.0, -1.0]]))[0]
-    return MotionInitialPose(
+    return InitialPose(
         dof_names=joint_names,
         dof_pos=tuple(final_pose[7:]),
-        root_quat_wxyz=tuple(root_quat_wxyz[0]),
-        projected_gravity=tuple(projected_gravity),
+        root_quat_wxyz=tuple(root_quat_wxyz),
     )
 
 

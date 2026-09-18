@@ -57,6 +57,7 @@ class PolicyState(StrEnum):
     IDLE = "idle"
     SWITCHING = "switching"
     RUNNING = "running"
+    FALLBACK = "fallback"
 
 
 class PolicyStateMachine:
@@ -102,6 +103,7 @@ class PolicyStateMachine:
             self.active_policy: tuple[str, ...] = ()
             self.requested_policy: tuple[str, ...] = ()
             self.reason: str | None = "startup"
+            self._fallback_inputs: dict[str, float] | None = None
             self.last_command_seq: int | None = None
             self._last_status: tuple[Any, ...] | None = None
         except BaseException:
@@ -154,6 +156,7 @@ class PolicyStateMachine:
     def _deactivate(self) -> None:
         names = self.active_policy
         self.active_policy = ()
+        self._fallback_inputs = None
         self._stop_policies(names)
 
     def _stop_policies(self, names) -> None:
@@ -167,7 +170,11 @@ class PolicyStateMachine:
             raise ExceptionGroup("Policy deactivation failed", errors)
 
     def _latch(self, reason: str) -> None:
-        self._deactivate()
+        try:
+            self._deactivate()
+        except Exception as error:
+            logger.exception("Failed to deactivate policies while latching")
+            reason = f"{reason}; deactivate_failed:{error}"
         self.state = PolicyState.LATCHED
         self.reason = reason
 
@@ -226,32 +233,98 @@ class PolicyStateMachine:
         if current + 1e-9 < self._next_state_publish:
             return
         timestamp = time.time()
-        payload = encode_robot_state(
-            robot_state,
-            self.dof_names,
-            started_at=self._started_at,
-            monotonic_now=current,
-            timestamp=timestamp,
-        )
+        self._next_state_publish = current + self._state_period
+        try:
+            payload = encode_robot_state(
+                robot_state,
+                self.dof_names,
+                started_at=self._started_at,
+                monotonic_now=current,
+                timestamp=timestamp,
+            )
+        except (TypeError, ValueError, IndexError) as error:
+            logger.warning(f"Skipping invalid state telemetry: {error}")
+            return
         self.transport.publish_state(payload)
         if len(self.active_policy) == 1:
             policy = self.policies[self.active_policy[0]]
             get_reference_state = getattr(policy, "get_reference_state", None)
             reference_state = get_reference_state() if get_reference_state is not None else None
             if reference_state is not None:
-                reference_payload = encode_robot_state(
-                    reference_state,
-                    self.dof_names,
-                    started_at=self._started_at,
-                    monotonic_now=current,
-                    timestamp=timestamp,
-                )
-                self.transport.publish_reference_state(reference_payload)
-        self._next_state_publish = current + self._state_period
+                try:
+                    reference_payload = encode_robot_state(
+                        reference_state,
+                        self.dof_names,
+                        started_at=self._started_at,
+                        monotonic_now=current,
+                        timestamp=timestamp,
+                    )
+                except (TypeError, ValueError, IndexError) as error:
+                    logger.warning(f"Skipping invalid reference telemetry: {error}")
+                else:
+                    self.transport.publish_reference_state(reference_payload)
 
     def _publish_idle_state(self, robot_state: LowState | None, now: float) -> None:
         if robot_state is not None:
             self._maybe_publish_state(robot_state, now)
+
+    def _estop_violations(self, names: tuple[str, ...], robot_state: LowState):
+        violations = []
+        for name in names:
+            checker = self.policies[name].estop
+            if checker is not None:
+                found = checker.check(robot_state)
+                if found:
+                    violations.append((name, found))
+        return violations
+
+    def _handle_estops(self, names: tuple[str, ...], robot_state: LowState) -> bool:
+        """Handle all violations before any policy in this group runs."""
+        violations = self._estop_violations(names, robot_state)
+        if not violations:
+            return False
+        detail = "; ".join(f"{name}: {', '.join(map(str, found))}" for name, found in violations)
+        reason = f"estop:{detail}"
+        if self._fallback_inputs is not None:
+            self._latch(f"{self.reason}; fallback_{reason}")
+            return True
+        if any(item.invalid for _, found in violations for item in found):
+            self._latch(reason)
+            return True
+
+        responses = []
+        for name, _ in violations:
+            fallback = self._specs[name].estop.fallback
+            if fallback is None:
+                self._latch(reason)
+                return True
+            target = self._specs[fallback.policy]
+            inputs = {p.name: p.default for p in target.input_parameters}
+            inputs.update(fallback.inputs)
+            responses.append((target.name, inputs))
+        if any(response != responses[0] for response in responses[1:]):
+            self._latch(f"{reason}; fallback_conflict")
+            return True
+
+        target_name, inputs = responses[0]
+        try:
+            self._deactivate()
+            target_violations = self._estop_violations((target_name,), robot_state)
+            if target_violations:
+                target_detail = ", ".join(str(item) for _, found in target_violations for item in found)
+                self._latch(f"{reason}; fallback_rejected:{target_name}: {target_detail}")
+                return True
+            self._activate((target_name,), robot_state)
+            if self.state != PolicyState.RUNNING:
+                self.reason = f"{reason}; fallback_rejected:{target_name}: {self.reason}"
+                return True
+        except Exception as error:
+            self._latch(f"{reason}; fallback_failed:{target_name}: {error}")
+            return True
+        self._fallback_inputs = inputs
+        self.state = PolicyState.FALLBACK
+        self.reason = reason
+        return True
 
     def tick(self, now: float | None = None) -> None:
         """Run one deterministic state-machine/control iteration."""
@@ -295,12 +368,18 @@ class PolicyStateMachine:
             self._publish_status()
             return
 
-        desired = self._canonical_selection(control.policy)
+        in_fallback = self._fallback_inputs is not None
+        desired = self.active_policy if in_fallback else self._canonical_selection(control.policy)
+        if robot_state is None:
+            self._latch("low_state_unavailable")
+            self._publish_status()
+            return
+        if self._handle_estops(desired, robot_state):
+            self._publish_idle_state(robot_state, current)
+            self._publish_status()
+            return
         if desired != self.active_policy:
-            if robot_state is None:
-                self._latch("low_state_unavailable")
-            else:
-                self._activate(desired, robot_state)
+            self._activate(desired, robot_state)
             self._publish_idle_state(robot_state, current)
             self._publish_status()
             return  # deliberate one-cycle low-command gap during a switch
@@ -308,26 +387,20 @@ class PolicyStateMachine:
         try:
             for name in desired:
                 policy = self.policies[name]
-                policy.apply_control(control.inputs[name])
-        except PolicyRuntimeFault as error:
-            self._latch(f"policy_fault:{'+'.join(desired)}:{error}")
-            self._publish_idle_state(robot_state, current)
-            self._publish_status()
-            return
-        if robot_state is None:
-            self._latch("low_state_unavailable")
-            self._publish_idle_state(robot_state, current)
-            self._publish_status()
-            return
-        try:
+                inputs = self._fallback_inputs if in_fallback else control.inputs[name]
+                policy.apply_control(inputs)
             self._step_active_policies(robot_state)
-        except PolicyRuntimeFault as error:
-            self._latch(f"policy_fault:{'+'.join(desired)}:{error}")
+        except Exception as error:
+            if not in_fallback and not isinstance(error, PolicyRuntimeFault):
+                raise
+            reason = f"policy_fault:{'+'.join(desired)}:{error}"
+            self._latch(f"{self.reason}; {reason}" if in_fallback else reason)
             self._publish_idle_state(robot_state, current)
             self._publish_status()
             return
-        self.state = PolicyState.RUNNING
-        self.reason = None
+        if not in_fallback:
+            self.state = PolicyState.RUNNING
+            self.reason = None
         self._publish_status()
 
     def run(self) -> None:

@@ -1,0 +1,32 @@
+name: limited-hold
+implementation: hold_position
+type: full_body
+inputs: []
+observation:
+  obs_dict: {}
+  obs_dims: {}
+  obs_scales: {}
+  history_length_dict: {}
+task:
+  rl_rate: 50.0
+limiter:
+  joints:
+    left_knee_joint:
+      pos: {min: -0.05, max: 2.5}
+      vel: 10.0
+    right_knee_joint:
+      pos: {min: -0.05, max: 2.5}
+      vel: 10.0
+estop:
+  joints:
+    left_knee_joint:
+      pos: {min: -0.08, max: 2.7}
+      vel: 15.0
+    right_knee_joint:
+      pos: {min: -0.08, max: 2.7}
+      vel: 15.0
+  rpy:
+    roll: {min: -0.5, max: 0.5}
+    pitch: {min: -0.6, max: 0.6}
+  fallback:
+    policy: recovery-hold

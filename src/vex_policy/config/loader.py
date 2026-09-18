@@ -9,18 +9,17 @@ import yaml
 
 from vex_policy.config.config_types import (
     ActionMaskConfig,
+    GuardConfig,
     HoldPositionTaskConfig,
     InferenceConfig,
     InterpolationTaskConfig,
     MqttConfig,
-    PassiveLocomotionGuardConfig,
     PassiveLocomotionTaskConfig,
     PolicySpec,
     RobotRuntimeConfig,
     RuntimeConfig,
     SonicTaskConfig,
     UfoTaskConfig,
-    WaistLocomotionGuardConfig,
     WaistLocomotionTaskConfig,
     WbtTaskConfig,
 )
@@ -103,8 +102,8 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
                 path_fields.append("planner_model_path")
         elif spec.implementation == "waist_locomotion" and not isinstance(spec.task, WaistLocomotionTaskConfig):
             raise ValueError(f"Policy {spec.name!r} requires WaistLocomotionTaskConfig")
-        elif spec.implementation == "waist_locomotion" and not isinstance(spec.guard, WaistLocomotionGuardConfig):
-            raise ValueError(f"Policy {spec.name!r} requires WaistLocomotionGuardConfig")
+        elif spec.implementation == "waist_locomotion" and not isinstance(spec.guard, GuardConfig):
+            raise ValueError(f"Policy {spec.name!r} requires GuardConfig")
         elif spec.implementation == "wbt" and not isinstance(spec.task, WbtTaskConfig):
             raise ValueError(f"Policy {spec.name!r} requires WbtTaskConfig")
         elif spec.implementation == "ufo":
@@ -118,8 +117,8 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
         if spec.implementation == "passive_locomotion":
             if not isinstance(spec.task, PassiveLocomotionTaskConfig):
                 raise ValueError(f"Policy {spec.name!r} requires PassiveLocomotionTaskConfig")
-            if not isinstance(spec.guard, PassiveLocomotionGuardConfig):
-                raise ValueError(f"Policy {spec.name!r} requires PassiveLocomotionGuardConfig")
+            if not isinstance(spec.guard, GuardConfig):
+                raise ValueError(f"Policy {spec.name!r} requires GuardConfig")
             if spec.type != "full_body" or spec.task.action_mask_path is not None:
                 raise ValueError(f"Passive locomotion policy {spec.name!r} requires full_body without action masks")
             path_fields.append("motion_data_path")
@@ -166,6 +165,8 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             task,
             spec.guard,
             action_mask,
+            limiter=spec.limiter,
+            estop=spec.estop,
         )
         rates.add(policy_config.task.rl_rate)
         resolved.append(ResolvedPolicy(spec, policy_config, spec.implementation))

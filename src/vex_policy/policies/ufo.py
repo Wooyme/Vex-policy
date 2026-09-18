@@ -19,10 +19,11 @@ from vex_policy.config.config_types import (
     UfoTrackingContextConfig,
 )
 from vex_policy.policies.base import BasePolicy, PolicyJointCommand, PolicyRuntimeFault
-from vex_policy.policies.guard.ufo import UfoGuard
-from vex_policy.policies.utils.inference import shared_session
-from vex_policy.policies.utils.joint_command import position_command
+from vex_policy.policies.guard.initial_pose import InitialPoseGuard
 from vex_policy.policies.sonic_planner import ort_providers
+from vex_policy.policies.utils.inference import shared_session
+from vex_policy.policies.utils.initial_pose import InitialPose
+from vex_policy.policies.utils.joint_command import position_command
 from vex_policy.robots import G1_JOINT_LOWER, G1_JOINT_UPPER, G1_JOINT_VELOCITY
 from vex_policy.robots.g1 import DOF_NAMES
 from vex_policy.sdk.base.base_interface import LowState
@@ -177,10 +178,21 @@ class UfoPolicy(BasePolicy):
         self.kp = model_config.kp
         self.kd = model_config.kd
         self.default_dof_angles = model_config.default_dof_angles
+        self.initial_pose = InitialPose(
+            dof_names=self.dof_names,
+            dof_pos=tuple(self.default_dof_angles),
+            root_quat_wxyz=(1.0, 0.0, 0.0, 0.0),
+        )
         self.rl_rate = config.task.rl_rate
         self.rl_dt = 1.0 / self.rl_rate
         if config.guard:
-            self.guard = UfoGuard(config.guard, self)
+            self.guard = InitialPoseGuard(
+                config.guard,
+                self.initial_pose,
+                self.dof_names,
+                self.logger,
+                reason_prefix="ufo_start_check_failed",
+            )
         else:
             self.guard = None
 

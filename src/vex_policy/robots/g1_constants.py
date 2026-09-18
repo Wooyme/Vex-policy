@@ -1,102 +1,13 @@
 """Unitree G1 29-DOF hardware joint constraints.
 
-All tuples use the hardware joint order declared by ``vex_policy.robots.g1.DOF_NAMES``.
+All lists use the hardware joint order declared by ``vex_policy.robots.g1.DOF_NAMES``.
+Values are loaded from the joint-name mapping in ``g1.yaml``.
 """
 
-G1_JOINT_LOWER = (
-    -2.5307,
-    -0.5236,
-    -2.7576,
-    -0.0873,
-    -0.8727,
-    -0.2618,
-    -2.5307,
-    -2.9671,
-    -2.7576,
-    -0.0873,
-    -0.8727,
-    -0.2618,
-    -2.618,
-    -0.52,
-    -0.52,
-    -3.0892,
-    -1.5882,
-    -2.618,
-    -1.0472,
-    -1.9722,
-    -1.6144,
-    -1.6144,
-    -3.0892,
-    -2.2515,
-    -2.618,
-    -1.0472,
-    -1.9722,
-    -1.6144,
-    -1.6144,
-)
+from ._g1_config import JOINT_PARAMETERS
 
-G1_JOINT_UPPER = (
-    2.8798,
-    2.9671,
-    2.7576,
-    2.8798,
-    0.5236,
-    0.2618,
-    2.8798,
-    0.5236,
-    2.7576,
-    2.8798,
-    0.5236,
-    0.2618,
-    2.618,
-    0.52,
-    0.52,
-    2.6704,
-    2.2515,
-    2.618,
-    2.0944,
-    1.9722,
-    1.6144,
-    1.6144,
-    2.6704,
-    1.5882,
-    2.618,
-    2.0944,
-    1.9722,
-    1.6144,
-    1.6144,
-)
-
-G1_JOINT_VELOCITY = (
-    32.0,
-    32.0,
-    32.0,
-    20.0,
-    37.0,
-    37.0,
-    32.0,
-    32.0,
-    32.0,
-    20.0,
-    37.0,
-    37.0,
-    32.0,
-    37.0,
-    37.0,
-    37.0,
-    37.0,
-    37.0,
-    37.0,
-    37.0,
-    22.0,
-    22.0,
-    37.0,
-    37.0,
-    37.0,
-    37.0,
-    37.0,
-    22.0,
-    22.0,
-)
+G1_JOINT_LOWER = JOINT_PARAMETERS["lower"]
+G1_JOINT_UPPER = JOINT_PARAMETERS["upper"]
+G1_JOINT_VELOCITY = JOINT_PARAMETERS["velocity"]
 
 __all__ = ["G1_JOINT_LOWER", "G1_JOINT_UPPER", "G1_JOINT_VELOCITY"]

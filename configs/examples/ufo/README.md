@@ -24,8 +24,10 @@ The independent top-level `guard` checks that the robot is upright and close
 to UFO's default pose before either startup mode runs. Its
 `startup_joint_tolerance_rad` and `startup_gravity_tolerance` thresholds must
 pass; otherwise activation enters the normal Vex latch path without writing a
-UFO command. The check is implemented by `UfoGuard`, following the waist
-locomotion guard structure.
+UFO command. The check uses the shared `InitialPoseGuard`. Optional
+`guard.startup_joint_tolerances_rad` maps joint names to individual tolerances;
+unlisted joints use `startup_joint_tolerance_rad`. Gravity tolerance measures the
+full projected-gravity vector difference and does not constrain heading.
 
 Reward and goal examples intentionally bind one named latent to one Vex policy.
 Duplicate a YAML and change `name`, context `name`, and reward `z_id` to expose

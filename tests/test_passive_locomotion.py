@@ -13,14 +13,14 @@ import yaml
 from onnx import TensorProto, helper, numpy_helper
 
 from vex_policy.config import load_runtime_config, resolve_policies
-from vex_policy.config.config_types import PassiveLocomotionGuardConfig, PassiveLocomotionTaskConfig
+from vex_policy.config.config_types import GuardConfig, PassiveLocomotionTaskConfig
 from vex_policy.policies.base import PolicyRuntimeFault
 from vex_policy.policies.passive_locomotion import PassiveLocomotionPolicy
 from vex_policy.policies.policy_state_machine import PolicyStateMachine
 from vex_policy.robots import G1_29DOF, G1_JOINT_LOWER, G1_JOINT_UPPER
 from vex_policy.sdk.base.base_interface import LowState
 
-EXAMPLE = Path(__file__).resolve().parents[1] / "configs/examples/g1_passive_locomotion.yaml"
+EXAMPLE = Path(__file__).resolve().parents[1] / "configs/g1/g1_passive_locomotion.yaml"
 
 
 def _urdf():
@@ -87,6 +87,7 @@ def deployment(tmp_path):
         joint_pos=np.stack([np.r_[[0, 0, 0, 1, 0, 0, 0], np.zeros(29)], np.r_[[0, 0, 0, 1, 0, 0, 0], pose[::-1]]]),
     )
     data = yaml.safe_load(EXAMPLE.read_text())
+    data["guard"] = {"startup_joint_tolerance_rad": 0.2, "startup_gravity_tolerance": 0.2}
     data["task"].update(model_path=str(model_path), motion_data_path=str(motion_path))
     path = tmp_path / "passive.yaml"
     path.write_text(yaml.safe_dump(data))
@@ -108,7 +109,7 @@ def deployment(tmp_path):
 def test_real_onnx_golden_history_actions_and_restart(deployment):
     policy = PassiveLocomotionPolicy(deployment.config)
     assert isinstance(deployment.config.task, PassiveLocomotionTaskConfig)
-    assert isinstance(deployment.config.guard, PassiveLocomotionGuardConfig)
+    assert isinstance(deployment.config.guard, GuardConfig)
     np.testing.assert_allclose(policy.default_dof_angles, deployment.pose)
     state = _state(q=deployment.pose.reshape(1, -1))
     assert policy.activate(state) is None
@@ -152,7 +153,9 @@ def test_real_onnx_golden_history_actions_and_restart(deployment):
     command = policy.step(_state(q=deployment.pose.reshape(1, -1)))
     buffer = policy.observations.obs_buf_dict["actor_obs"][0]
     np.testing.assert_array_equal(buffer[:580], 0)
-    np.testing.assert_allclose(policy.passive_command, [[0.03, 0.055, 0.275, 0.1]])
+    np.testing.assert_allclose(
+        policy.passive_command, [[policy.parameters[name].default for name in policy._COMMAND_NAMES]]
+    )
     policy.close()
 
 
@@ -212,7 +215,9 @@ def test_model_rejection(deployment, change, match):
         PassiveLocomotionPolicy(deployment.config)
 
 
-@pytest.mark.parametrize("change", ["history", "terms", "scale", "command", "height_range", "pose_names", "pose_limit"])
+@pytest.mark.parametrize(
+    "change", ["history", "terms", "scale", "command", "negative_height_range", "pose_names", "pose_limit"]
+)
 def test_configuration_rejection(deployment, change):
     config = deployment.config
     if change == "history":
@@ -226,9 +231,9 @@ def test_configuration_rejection(deployment, change):
         )
     elif change == "command":
         config = replace(config, inputs=config.inputs[:-1])
-    elif change == "height_range":
+    elif change == "negative_height_range":
         last = config.inputs[-1].model_copy(
-            update={"parameter": config.inputs[-1].parameter.model_copy(update={"max": 0.5})}
+            update={"parameter": config.inputs[-1].parameter.model_copy(update={"min": -0.01})}
         )
         config = replace(config, inputs=(*config.inputs[:-1], last))
     else:

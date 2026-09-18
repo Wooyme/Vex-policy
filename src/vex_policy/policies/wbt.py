@@ -11,10 +11,11 @@ from termcolor import colored
 
 from vex_policy.config.config_types.inference import InferenceConfig
 from vex_policy.policies.base import BasePolicy, PolicyRuntimeFault
-from vex_policy.policies.guard.wbt import WbtGuard
-from vex_policy.policies.utils.inference import load_metadata, resolve_control_gains
-from vex_policy.policies.utils.joint_command import PositionAction, position_command
+from vex_policy.policies.guard.initial_pose import InitialPoseGuard
 from vex_policy.policies.observations import ObservationHistory
+from vex_policy.policies.utils.inference import load_metadata, resolve_control_gains
+from vex_policy.policies.utils.initial_pose import InitialPose, normalize_quaternion_wxyz
+from vex_policy.policies.utils.joint_command import PositionAction, position_command
 from vex_policy.policies.utils.wbt_utils import MotionClockUtil, NpzTargetSource, PinocchioRobot, TimestepUtil
 from vex_policy.robots import G1_JOINT_LOWER, G1_JOINT_UPPER, G1_JOINT_VELOCITY
 from vex_policy.sdk.base.base_interface import LowState
@@ -23,6 +24,7 @@ from vex_policy.utils.joint_interpolation import JointPositionInterpolator
 from vex_policy.utils.latency import LatencyStage
 from vex_policy.utils.math.quat import (
     matrix_from_quat,
+    quat_inverse,
     quat_mul,
     quat_to_rpy,
     rpy_to_quat,
@@ -85,10 +87,17 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.per_joint_policy_action_scale: np.ndarray | None = None
 
         self.setup_policy(config.task.model_path)
+        self.initial_pose = self._load_initial_pose()
         self.robot_config = resolve_control_gains(self.robot_config, self.onnx_kp, self.onnx_kd)
         self._configure_action_scales()
         if self.config.guard:
-            self.guard = WbtGuard(self.config.guard, self)
+            self.guard = InitialPoseGuard(
+                self.config.guard,
+                self.initial_pose,
+                self.dof_names,
+                self.logger,
+                reason_prefix="wbt_start_check_failed",
+            )
 
         # Retain the configured stdin gate, but preload never sends a command.
         if not self.config.task.skip_stiff_prompt:
@@ -107,6 +116,24 @@ class WholeBodyTrackingPolicy(BasePolicy):
         except BaseException:
             self.clock_sub.close()
             raise
+
+    def _load_initial_pose(self) -> InitialPose:
+        """Convert the startup reference-link orientation to a base orientation."""
+        joint_pos = np.asarray(self.motion_command_0[0, : self.num_dofs], dtype=np.float64)
+        # With an identity base orientation, FK gives base-to-reference rotation.
+        configuration = np.concatenate(
+            ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], joint_pos[self.pinocchio_robot.real2pinocchio_index])
+        )
+        ref_in_base = self.pinocchio_robot.fk_and_get_ref_body_orientation_in_world(configuration)
+        base_to_ref = normalize_quaternion_wxyz(xyzw_to_wxyz(ref_in_base)[0])[None, :]
+        world_to_ref = normalize_quaternion_wxyz(xyzw_to_wxyz(self.ref_quat_xyzw_0)[0])[None, :]
+        # R_world_base = R_world_ref @ R_base_ref.T
+        world_to_base = quat_mul(world_to_ref, quat_inverse(base_to_ref))[0]
+        return InitialPose(
+            dof_names=self.dof_names,
+            dof_pos=tuple(joint_pos),
+            root_quat_wxyz=tuple(world_to_base),
+        )
 
     def _get_ref_body_orientation_in_world(self, robot_state_data: LowState):
         # Create configuration for pinocchio robot

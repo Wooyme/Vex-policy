@@ -11,13 +11,13 @@ import pytest
 
 from vex_policy.config.config_types import (
     ActionMaskConfig,
+    GuardConfig,
     InferenceConfig,
     InputParameter,
     ObservationConfig,
     SliderInput,
     SonicTaskConfig,
     TaskConfig,
-    WaistLocomotionGuardConfig,
     WaistLocomotionTaskConfig,
     WbtTaskConfig,
 )
@@ -198,7 +198,7 @@ def test_waist_constructor_reference_capture_limits_and_restart(tmp_path, monkey
             {"actor_obs": list(dims)}, dims, waist_locomotion.WaistLocomotionPolicy._OBS_SCALES, {"actor_obs": 1}
         ),
         task=WaistLocomotionTaskConfig(model_path="fake.onnx", motion_data_path=str(motion)),
-        guard=WaistLocomotionGuardConfig(),
+        guard=GuardConfig(),
     )
     policy = waist_locomotion.WaistLocomotionPolicy(config)
     robot_state = _state()
@@ -220,7 +220,11 @@ def test_waist_constructor_reference_capture_limits_and_restart(tmp_path, monkey
 
 
 @pytest.mark.parametrize("startup_mode", ["immediate", "interpolate"])
-def test_wbt_real_constructor_preserves_startup_inference_and_restart(monkeypatch, startup_mode):
+@pytest.mark.parametrize("guard_enabled", [False, True])
+@pytest.mark.parametrize("target_source", ["onnx", "npz"])
+def test_wbt_real_constructor_preserves_startup_inference_and_restart(
+    monkeypatch, tmp_path, startup_mode, guard_enabled, target_source
+):
     session = FakeSession(58, wbt_model=True)
     _patch_onnx(monkeypatch, session, {"kp": [5.0] * 29, "kd": [0.5] * 29, "robot_urdf": "unused"})
     monkeypatch.setattr(
@@ -231,6 +235,19 @@ def test_wbt_real_constructor_preserves_startup_inference_and_restart(monkeypatc
             fk_and_get_ref_body_orientation_in_world=lambda q: np.array([[0.0, 0, 0, 1]]),
         ),
     )
+    motion_path = None
+    if target_source == "npz":
+        motion_path = str(tmp_path / "wbt.npz")
+        positions = np.tile(G1_29DOF.default_dof_angles, (6, 1))
+        positions += np.arange(6)[:, None] / 300  # Frame 3 matches the ONNX initial target.
+        np.savez(
+            motion_path,
+            joint_names=G1_29DOF.dof_names,
+            joint_pos=positions,
+            joint_vel=np.zeros_like(positions),
+            body_names=["torso_link"],
+            body_quat_w=np.tile([1.0, 0.0, 0.0, 0.0], (6, 1, 1)),
+        )
     config = InferenceConfig(
         robot=G1_29DOF,
         inputs=(),
@@ -240,20 +257,31 @@ def test_wbt_real_constructor_preserves_startup_inference_and_restart(monkeypatc
             {"dof_pos": 1.0, "actions": 1.0},
             {"actor_obs": 1},
         ),
+        guard=GuardConfig() if guard_enabled else None,
         task=WbtTaskConfig(
             model_path="fake.onnx",
             startup_mode=startup_mode,
+            motion_data_path=motion_path,
             init_duration_s=0.02,
             motion_start_timestep=3,
             motion_end_timestep=5,
         ),
     )
     policy = wbt.WholeBodyTrackingPolicy(config)
+    np.testing.assert_allclose(policy.initial_pose.dof_pos, np.asarray(G1_29DOF.default_dof_angles) + 0.01)
+    np.testing.assert_allclose(policy.initial_pose.root_quat_wxyz, [1, 0, 0, 0])
+    initial_pose = policy.initial_pose
+    initial_target_feeds = len(session.feeds)
     robot_state = _state()
-    policy.activate(robot_state)
+    if guard_enabled:
+        bad_q = robot_state.joint_pos[0].copy()
+        bad_q[22] += 0.5  # The old WBT guard ignored shoulders.
+        assert "right_shoulder_pitch_joint" in policy.activate(_state(bad_q))
+        assert not policy.is_active
+    assert policy.activate(robot_state) is None
     if startup_mode == "interpolate":
         command = policy.step(robot_state)
-        assert len(session.feeds) == 1  # Only model target lookup at construction.
+        assert len(session.feeds) == initial_target_feeds  # No inference during interpolation.
         assert policy._stage is wbt.WbtStage.TRACKING
         np.testing.assert_allclose(command.q, np.asarray(config.robot.default_dof_angles) + 0.01)
     command = policy.step(robot_state)
@@ -269,6 +297,7 @@ def test_wbt_real_constructor_preserves_startup_inference_and_restart(monkeypatc
     policy.step(robot_state)
     for name in first:
         np.testing.assert_array_equal(session.feeds[-1][name], first[name])
+    assert policy.initial_pose is initial_pose
     policy.close()
 
 
@@ -375,7 +404,14 @@ def test_sonic_deactivate_joins_inflight_planner_and_discards_result(monkeypatch
 def test_wbt_constructor_closes_partially_started_clock(monkeypatch):
     session = FakeSession(29, wbt_model=True)
     _patch_onnx(monkeypatch, session, {"kp": [5.0] * 29, "kd": [0.5] * 29, "robot_urdf": "unused"})
-    monkeypatch.setattr(wbt, "PinocchioRobot", lambda *args: object())
+    monkeypatch.setattr(
+        wbt,
+        "PinocchioRobot",
+        lambda *args: SimpleNamespace(
+            real2pinocchio_index=np.arange(29),
+            fk_and_get_ref_body_orientation_in_world=lambda q: np.array([[0.0, 0, 0, 1]]),
+        ),
+    )
     events = []
 
     class BrokenClock:

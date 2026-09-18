@@ -26,7 +26,7 @@ class RobotConfig:
     ...     robot="g1",
     ...     num_motors=29,
     ...     num_joints=29,
-    ...     default_dof_angles=(...),  # 29 values
+    ...     default_dof_angles=[...],  # 29 values
     ...     motor_kp=(...),  # 29 values
     ...     # ... other required fields
     ... )
@@ -43,16 +43,16 @@ class RobotConfig:
     """Robot family name (e.g., 'g1', 't1')."""
 
     # =========================================================================
-    # Default Positions (REQUIRED - immutable tuples, no defaults)
+    # Default Positions (REQUIRED - ordered lists, no defaults)
     # =========================================================================
 
-    default_dof_angles: tuple[float, ...]
+    default_dof_angles: list[float]
     """Default joint angles in radians (length: num_joints).
 
     These are the target positions when the robot is in its default standing pose.
     """
 
-    default_motor_angles: tuple[float, ...]
+    default_motor_angles: list[float]
     """Default motor angles in radians (length: num_motors).
 
     Typically identical to default_dof_angles unless there's a motor-to-joint mapping.
@@ -62,14 +62,14 @@ class RobotConfig:
     # Mappings (REQUIRED - no defaults)
     # =========================================================================
 
-    motor2joint: tuple[int, ...]
+    motor2joint: list[int]
     """Motor index to joint index mapping (length: num_motors).
 
     Maps motor indices to their corresponding joint indices.
     For most robots, this is an identity mapping [0, 1, 2, ..., n-1].
     """
 
-    joint2motor: tuple[int, ...]
+    joint2motor: list[int]
     """Joint index to motor index mapping (length: num_joints).
 
     Inverse of motor2joint mapping.
@@ -120,7 +120,7 @@ class RobotConfig:
     If provided, these values override the ONNX metadata.
     """
 
-    default_per_joint_action_scale: tuple[float, ...] | None = None
+    default_per_joint_action_scale: list[float] | None = None
     """Fallback per-joint action scales used when ONNX metadata is missing."""
 
     joint_interpolation_slew_safety_factor: float = Field(default=0.5, gt=0.0, le=1.0, allow_inf_nan=False)
@@ -130,21 +130,21 @@ class RobotConfig:
     # WBT Stiff Startup Configuration (OPTIONAL - for WBT policies)
     # =========================================================================
 
-    stiff_startup_pos: tuple[float, ...] | None = None
+    stiff_startup_pos: list[float] | None = None
     """Stiff startup joint positions for WBT policy (length: num_joints).
 
     Target positions used during stiff hold mode before policy activation.
     Only used by WholeBodyTracking policy.
     """
 
-    stiff_startup_kp: tuple[float, ...] | None = None
+    stiff_startup_kp: list[float] | None = None
     """Stiff startup position gains for WBT policy (length: num_joints).
 
     Proportional gains used during stiff hold mode before policy activation.
     Only used by WholeBodyTracking policy.
     """
 
-    stiff_startup_kd: tuple[float, ...] | None = None
+    stiff_startup_kd: list[float] | None = None
     """Stiff startup velocity gains for WBT policy (length: num_joints).
 
     Derivative gains used during stiff hold mode before policy activation.

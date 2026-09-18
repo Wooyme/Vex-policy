@@ -9,33 +9,22 @@ from typing import ClassVar
 import numpy as np
 
 from vex_policy.config.config_types import (
+    GuardConfig,
     InferenceConfig,
-    PassiveLocomotionGuardConfig,
     PassiveLocomotionTaskConfig,
     SliderInput,
     input_parameters,
 )
-from vex_policy.policies.guard.waist_locomotion import WaistLocomotionGuard
+from vex_policy.policies.guard.initial_pose import InitialPoseGuard
+from vex_policy.policies.utils.inference import OnnxActor, resolve_control_gains
+from vex_policy.policies.utils.joint_command import PositionAction, position_command
+from vex_policy.policies.utils.locomotion_utils import RightAnkleKinematics, load_motion_last_pose
 from vex_policy.robots import G1_JOINT_LOWER, G1_JOINT_UPPER
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.latency import LatencyStage
 
 from .base import BasePolicy, PolicyRuntimeFault
-from vex_policy.policies.utils.inference import OnnxActor, resolve_control_gains
-from vex_policy.policies.utils.joint_command import PositionAction, position_command
-from vex_policy.policies.utils.locomotion_utils import RightAnkleKinematics, load_motion_last_pose
 from .observations import ObservationHistory, robot_observation_terms
-
-
-class PassiveLocomotionGuard(WaistLocomotionGuard):
-    reason_prefix = "passive_locomotion_start_check_failed"
-
-    def start_check(self, robot_state_data: LowState) -> tuple[bool, str | None]:
-        try:
-            state = self.policy.validated_state(robot_state_data)
-        except PolicyRuntimeFault as error:
-            return self._fail(f"{self.reason_prefix}: {error}")
-        return super().start_check(state)
 
 
 class PassiveLocomotionPolicy(BasePolicy):
@@ -64,8 +53,8 @@ class PassiveLocomotionPolicy(BasePolicy):
     def __init__(self, config: InferenceConfig):
         if not isinstance(config.task, PassiveLocomotionTaskConfig):
             raise TypeError("PassiveLocomotionPolicy requires PassiveLocomotionTaskConfig")
-        if not isinstance(config.guard, PassiveLocomotionGuardConfig):
-            raise TypeError("PassiveLocomotionPolicy requires PassiveLocomotionGuardConfig")
+        if not isinstance(config.guard, GuardConfig):
+            raise TypeError("PassiveLocomotionPolicy requires GuardConfig")
         if config.action_mask is not None or config.task.action_mask_path is not None:
             raise ValueError("Passive locomotion does not support action masks")
         if config.robot.num_joints != 29 or config.robot.num_motors != 29:
@@ -80,7 +69,6 @@ class PassiveLocomotionPolicy(BasePolicy):
             raise ValueError(f"Passive locomotion requires four sliders: {self._COMMAND_NAMES}")
         if any(p.min < 0 for p in self.parameters.values()):
             raise ValueError("Passive command ranges must be nonnegative")
-
 
         self.initial_pose = load_motion_last_pose(config.task.motion_data_path)
         names = self.initial_pose.dof_names
@@ -108,7 +96,13 @@ class PassiveLocomotionPolicy(BasePolicy):
         )
         self.passive_command = np.zeros((1, 4), dtype=np.float32)
         self._reset_episode()
-        self.guard = PassiveLocomotionGuard(config.guard, self)
+        self.guard = InitialPoseGuard(
+            config.guard,
+            self.initial_pose,
+            self.dof_names,
+            self.logger,
+            reason_prefix="passive_locomotion_start_check_failed",
+        )
 
     def _validate_observations(self) -> None:
         obs = self.config.observation

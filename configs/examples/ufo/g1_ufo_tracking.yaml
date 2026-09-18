@@ -62,4 +62,5 @@ task:
     force_zero_action: false
 guard:
   startup_joint_tolerance_rad: 0.2
+  startup_joint_tolerances_rad: {}  # Joint-name overrides; other joints use the default above.
   startup_gravity_tolerance: 0.2

@@ -163,8 +163,86 @@ uv run vex-policy --policy-config configs/examples/ufo --interface eth0
 
 将 `task.startup_mode` 设为 `prefill` 可跳过 10 秒插值，由当前关节姿态反算等价 residual action，并立即
 填满 4 帧 observation/action 历史；该配置只接受 `prefill` 和 `interpolate`。启动姿态检查与模式独立，
-由顶层 `guard.startup_joint_tolerance_rad` 和 `guard.startup_gravity_tolerance` 配置、独立的 `UfoGuard`
+由顶层 `guard.startup_joint_tolerance_rad` 和 `guard.startup_gravity_tolerance` 配置、通用的 `InitialPoseGuard`
 执行；检查失败时拒绝激活并进入锁存。
+
+UFO、waist locomotion、passive locomotion 和 WBT 共用 `InitialPoseGuard` / `GuardConfig`。
+Guard 接收独立的 `InitialPose`（关节名、位置、基座 `wxyz` 四元数），按机器人关节顺序对齐后检查全身关节。
+UFO 参考模型默认姿态和直立朝向，waist/passive 参考 motion 最后一帧，WBT 参考配置起始帧；
+WBT 的躯干参考朝向先通过初始关节位置的 FK 转换为基座朝向。参考姿态不会随推理帧推进而改变。
+
+每个关节可以单独设置阈值，未列出的关节使用 `startup_joint_tolerance_rad`：
+
+```yaml
+guard:
+  startup_joint_tolerance_rad: 0.2
+  startup_joint_tolerances_rad:
+    left_knee_joint: 0.35
+    right_knee_joint: 0.35
+  startup_gravity_tolerance: 0.2
+```
+
+两个默认阈值均为 `0.2`，覆盖映射默认为空。阈值必须有限且大于零，未知关节名会报错。
+关节绝对误差超过各自阈值才拒绝启动；动作 mask 不排除检查中的关节。
+重力阈值是完整投影重力向量差的欧氏范数，不是角度，也不检查航向角。
+检查还会拒绝形状错误、非有限的关节位置/速度、基座角速度，以及非法四元数；有效四元数会归一化，
+不修改输入状态。waist/passive 必须配置 `guard`，UFO/WBT 省略时不启用检查。
+
+WBT 启用 Guard 后同样检查全身和完整重力向量，原来的仅腿部、仅重力 Z 分量检查已移除。
+旧 `bad_lower_joint_pos_threshold`、`bad_ref_ori_threshold` 字段和各策略专用 Guard/配置类不再支持；
+迁移时需明确设置新阈值，旧重力阈值不能直接视为新阈值。
+
+策略还可配置输出限位器 `limiter` 和运行急停器 `estop`，不配置时保持原有行为。
+配置中的角度统一为 rad、速度为 rad/s，关节名与机器人配置一致：
+
+```yaml
+limiter:
+  joints:
+    left_knee_joint:
+      pos: {min: -0.05, max: 2.5}
+      vel: 10.0
+estop:
+  joints:
+    left_knee_joint:
+      pos: {min: -0.08, max: 2.7}
+      vel: 15.0
+  rpy:
+    roll: {min: -0.5, max: 0.5}
+    pitch: {min: -0.6, max: 0.6}
+    yaw: {min: -3.14, max: 3.14}
+  fallback:
+    policy: recovery-policy
+    inputs:
+      target_height: 0.25
+```
+
+`pos`、`vel` 和各 RPY 轴均可独立省略。范围满足 `min <= max`，速度上限非负，所有值必须有限；
+等于边界允许。未知关节名、非法范围和无效替代策略会在启动时报错。
+
+`limiter` 位于所有策略共有的输出后处理阶段，也覆盖启动插值和保持姿态。
+它按最终计入校准偏移的关节坐标裁剪 `q`，只对命令实际控制的关节生效；
+G1 配置与硬件边界取交集，无交集时报错。`vel` **只裁剪 `dq` 命令**，不限制 `q` 的逐周期变化率；
+多数位置策略的 `dq` 为零，其已有插值和位置限速逻辑仍独立生效。限位不修改动作历史、力矩或 PD 参数。
+
+`estop` 在激活前和每周期推理前检查实测状态，配置的关节不受动作 mask 排除。
+基座 RPY 为归一化四元数对应的世界系 ZYX 欧拉角，roll/yaw 使用 `[-π, π)` 主值，pitch 使用
+`[-π/2, π/2]`；不支持跨越 ±π 接缝的范围或累计航向。任意项目单次严格越界即触发，
+该周期不执行原策略推理、不下发命令，上下半身并行策略会一起停止。
+
+省略 `fallback` 时进入现有 `latched` 状态，停止下发命令，不自动发送保持或阻尼命令。
+配置 `fallback` 时，其 `policy` 必须是已加载的另一个全身策略，`inputs` 可覆盖该策略声明的部分
+默认输入，未覆盖参数沿用默认值。替代策略正常执行自己的急停检查和启动 Guard，通过后进入
+`fallback` 状态，下一周期才开始下发命令。非法实测状态直接锁存，不尝试替代。
+
+替代期间固定使用上述输入，忽略外部非空策略选择及输入；先发送非急停空选择结束替代，之后才能
+重新选策略。外部急停、命令超时和状态缺失仍会停止替代，因此仍需持续发送心跳。
+状态消息保留实际 `active_policy`、外部 `requested_policy` 和触发 `reason`。
+多个检查器同时触发时，停止优先；仅当替代目标和有效输入完全一致时执行替代，否则锁存。
+替代策略启动被拒绝、再次越界或运行失败时直接锁存，不继续递归替代。
+
+模型无关的完整示例位于 `configs/examples/safety/`，可使用
+`vex-policy --config configs/examples/safety` 加载。`limited-hold` 越界后切换为 `recovery-hold`，
+后者捕获并保持切换时的实测姿态。示例阈值只在该示例目录中启用，现有部署配置不会自动启用限制。
 
 配置按变化频率拆分：
 
@@ -209,7 +287,7 @@ Holosoma `waist_loco` 分支的 pelvis-sine 策略使用独立示例
 并使用 `motion_data_path` 所指 NPZ motion 的最后一帧作为关节残差零位；激活前会检查当前关节和机身倾斜
 是否接近该帧。motion 必须包含根姿态格式为 `[xyz,wxyz]` 的 `joint_pos` 和可用于关节重排的 `joint_names`。
 启动检查由独立的
-`WaistLocomotionGuard` 执行，其关节和重力误差阈值配置在 policy YAML 顶层的 `guard` 中。
+`InitialPoseGuard` 执行，其关节和重力误差阈值配置在 policy YAML 顶层的 `guard` 中。
 
 105 维 pelvis-sine 分支将六个真实物理量分别声明为滑条：`amplitude` 范围 `[0.05,0.20]`、默认 `0.125`，
 `frequency` 范围 `[0.2,2.0]`、默认 `1.1`，方向 `x/y/z` 范围均为 `[-1,1]`、默认

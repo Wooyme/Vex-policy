@@ -1,43 +1,16 @@
-import math
+from typing import Annotated
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
+
+PositiveTolerance = Annotated[float, Field(gt=0.0, allow_inf_nan=False)]
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class GuardConfig:
-    bad_lower_joint_pos_threshold: float = 0.8
-    bad_ref_ori_threshold: float = 0.0
+    """Startup pose tolerances shared by all guarded policies."""
 
-
-@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class WaistLocomotionGuardConfig:
-    """Startup pose thresholds for waist locomotion."""
-
-    startup_joint_tolerance_rad: float = 0.2
-    startup_gravity_tolerance: float = 0.2
-
-    def __post_init__(self) -> None:
-        if not math.isfinite(self.startup_joint_tolerance_rad) or self.startup_joint_tolerance_rad <= 0.0:
-            raise ValueError("startup_joint_tolerance_rad must be finite and positive")
-        if not math.isfinite(self.startup_gravity_tolerance) or self.startup_gravity_tolerance <= 0.0:
-            raise ValueError("startup_gravity_tolerance must be finite and positive")
-
-
-@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class PassiveLocomotionGuardConfig(WaistLocomotionGuardConfig):
-    """Startup pose thresholds for passive locomotion."""
-
-
-@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class UfoGuardConfig:
-    """Startup pose thresholds for UFO policies."""
-
-    startup_joint_tolerance_rad: float = 0.2
-    startup_gravity_tolerance: float = 0.2
-
-    def __post_init__(self) -> None:
-        if not math.isfinite(self.startup_joint_tolerance_rad) or self.startup_joint_tolerance_rad <= 0.0:
-            raise ValueError("startup_joint_tolerance_rad must be finite and positive")
-        if not math.isfinite(self.startup_gravity_tolerance) or self.startup_gravity_tolerance <= 0.0:
-            raise ValueError("startup_gravity_tolerance must be finite and positive")
+    startup_joint_tolerance_rad: PositiveTolerance = 0.2
+    startup_gravity_tolerance: PositiveTolerance = 0.2
+    startup_joint_tolerances_rad: dict[str, PositiveTolerance] = Field(default_factory=dict)
+    """Joint-name overrides; omitted joints use startup_joint_tolerance_rad."""

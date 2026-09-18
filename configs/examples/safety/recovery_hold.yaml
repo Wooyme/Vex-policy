@@ -1,0 +1,11 @@
+name: recovery-hold
+implementation: hold_position
+type: full_body
+inputs: []
+observation:
+  obs_dict: {}
+  obs_dims: {}
+  obs_scales: {}
+  history_length_dict: {}
+task:
+  rl_rate: 50.0

@@ -7,9 +7,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .control import PolicyInput, input_parameters
-from .GuardConfig import GuardConfig, PassiveLocomotionGuardConfig, UfoGuardConfig, WaistLocomotionGuardConfig
+from .GuardConfig import GuardConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
+from .safety import EmergencyStopConfig, LimiterConfig
 from .task import (
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
@@ -79,7 +80,9 @@ class PolicySpec(StrictModel):
         | UfoTaskConfig
         | PassiveLocomotionTaskConfig
     )
-    guard: GuardConfig | WaistLocomotionGuardConfig | UfoGuardConfig | PassiveLocomotionGuardConfig | None = None
+    guard: GuardConfig | None = None
+    limiter: LimiterConfig | None = None
+    estop: EmergencyStopConfig | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -98,13 +101,6 @@ class PolicySpec(StrictModel):
         implementation = value.get("implementation")
         task_type = task_types.get(implementation, TaskConfig)
         selected = {**value, "task": task_type(**value["task"])}
-        guard_types = {
-            "ufo": UfoGuardConfig,
-            "waist_locomotion": WaistLocomotionGuardConfig,
-            "passive_locomotion": PassiveLocomotionGuardConfig,
-        }
-        if isinstance(value.get("guard"), dict) and implementation in guard_types:
-            selected["guard"] = guard_types[implementation](**value["guard"])
         return selected
 
     @field_validator("name", "implementation")
@@ -143,4 +139,22 @@ class RuntimeConfig(StrictModel):
     @model_validator(mode="after")
     def validate_policies(self) -> RuntimeConfig:
         _validate_policy_set(self.policies)
+        specs = {spec.name: spec for spec in self.policies}
+        for spec in self.policies:
+            for limits in (spec.limiter, spec.estop):
+                if limits is not None:
+                    limits.validate_joints(self.robot.config.dof_names)
+            fallback = spec.estop.fallback if spec.estop is not None else None
+            if fallback is None:
+                continue
+            target = specs.get(fallback.policy)
+            if target is None or target.name == spec.name or target.type != "full_body":
+                raise ValueError(f"Policy {spec.name!r} fallback must name another loaded full_body policy")
+            parameters = {p.name: p for p in target.input_parameters}
+            unknown = fallback.inputs.keys() - parameters.keys()
+            if unknown:
+                raise ValueError(f"Unknown fallback inputs for {target.name!r}: {sorted(unknown)}")
+            for name, value in fallback.inputs.items():
+                if not parameters[name].min <= value <= parameters[name].max:
+                    raise ValueError(f"Fallback input {target.name}.{name} is outside its configured range")
         return self

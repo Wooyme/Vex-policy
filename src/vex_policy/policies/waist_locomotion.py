@@ -8,23 +8,22 @@ from typing import ClassVar
 import numpy as np
 
 from vex_policy.config.config_types import (
+    GuardConfig,
     InferenceConfig,
     SliderInput,
-    WaistLocomotionGuardConfig,
     WaistLocomotionTaskConfig,
     input_parameters,
 )
-from vex_policy.policies.guard.waist_locomotion import WaistLocomotionGuard
+from vex_policy.policies.guard.initial_pose import InitialPoseGuard
+from vex_policy.policies.utils.inference import OnnxActor, resolve_control_gains
+from vex_policy.policies.utils.joint_command import PositionAction, position_command
+from vex_policy.policies.utils.locomotion_utils import RightAnkleKinematics
+from vex_policy.policies.utils.locomotion_utils import load_motion_last_pose as load_waist_motion_last_pose
 from vex_policy.robots import G1_JOINT_LOWER, G1_JOINT_UPPER
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.latency import LatencyStage
 
 from .base import BasePolicy, PolicyRuntimeFault
-from vex_policy.policies.utils.inference import OnnxActor, resolve_control_gains
-from vex_policy.policies.utils.joint_command import PositionAction, position_command
-from vex_policy.policies.utils.locomotion_utils import MotionInitialPose as WaistInitialPose  # noqa: F401
-from vex_policy.policies.utils.locomotion_utils import RightAnkleKinematics
-from vex_policy.policies.utils.locomotion_utils import load_motion_last_pose as load_waist_motion_last_pose
 from .observations import ObservationHistory, robot_observation_terms
 
 
@@ -86,8 +85,8 @@ class WaistLocomotionPolicy(BasePolicy):
     def __init__(self, config: InferenceConfig):
         if not isinstance(config.task, WaistLocomotionTaskConfig):
             raise TypeError("WaistLocomotionPolicy requires WaistLocomotionTaskConfig")
-        if not isinstance(config.guard, WaistLocomotionGuardConfig):
-            raise TypeError("WaistLocomotionPolicy requires WaistLocomotionGuardConfig")
+        if not isinstance(config.guard, GuardConfig):
+            raise TypeError("WaistLocomotionPolicy requires GuardConfig")
         if not all(isinstance(component, SliderInput) for component in config.inputs):
             raise ValueError("Waist locomotion inputs must contain only sliders")
         parameters = {parameter.name: parameter for parameter in input_parameters(config.inputs)}
@@ -127,7 +126,13 @@ class WaistLocomotionPolicy(BasePolicy):
             force_zero=config.task.debug.force_zero_action,
         )
         self._init_commands()
-        self.guard = WaistLocomotionGuard(config.guard, self)
+        self.guard = InitialPoseGuard(
+            config.guard,
+            self.initial_pose,
+            self.dof_names,
+            self.logger,
+            reason_prefix="waist_locomotion_start_check_failed",
+        )
 
     def _load_initial_joint_pose(self) -> None:
         source_names = self.initial_pose.dof_names

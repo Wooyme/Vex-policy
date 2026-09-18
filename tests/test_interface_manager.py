@@ -74,6 +74,7 @@ class _ParallelPolicy:
         self.applied = []
         self.activated: list[LowState] = []
         self.num_dofs = 3
+        self.estop = None
         self.dof_names = ("a", "b", "c")
         self.default_dof_angles = np.zeros(3)
         self.joint_offsets = np.asarray([0.1, 0.1, 0.1])
@@ -123,6 +124,7 @@ def _state_machine(manager, lower, upper) -> PolicyStateMachine:
     machine.active_policy = ("lower", "upper")
     machine.requested_policy = ()
     machine.reason = None
+    machine._fallback_inputs = None
     machine.last_command_seq = None
     machine._last_status = None
     machine._publish_status = lambda **kwargs: None

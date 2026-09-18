@@ -67,6 +67,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 vex_policy = [
     "py.typed",
+    "robots/*.yaml",
 ]
 log_viewer = [
     "assets/*.css",

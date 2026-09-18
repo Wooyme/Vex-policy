@@ -17,6 +17,8 @@ import numpy as np
 from loguru import logger
 
 from vex_policy.config.config_types.inference import InferenceConfig
+from vex_policy.policies.emergency_stop import EmergencyStop
+from vex_policy.policies.limiter import JointCommandLimiter
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.latency import LatencyTracker
 
@@ -70,6 +72,8 @@ class BasePolicy(ABC):
         self.rl_rate = config.task.rl_rate
         self.latency_tracker = LatencyTracker(window_size=max(1, int(self.rl_rate)))
         self.guard: BaseGuard | None = None
+        self.limiter = JointCommandLimiter(config.limiter, config.robot) if config.limiter is not None else None
+        self.estop = EmergencyStop(config.estop, self.dof_names) if config.estop is not None else None
         self._lifecycle_state = PolicyLifecycleState.INACTIVE
         self._lifecycle_lock = threading.RLock()
 
@@ -118,7 +122,13 @@ class BasePolicy(ABC):
                 raise RuntimeError("Policy is not active")
             self.latency_tracker.start_cycle()
             try:
-                return self._compute_command(robot_state_data)
+                command = self._compute_command(robot_state_data)
+                if self.limiter is not None:
+                    try:
+                        command = self.limiter.postprocess(command)
+                    except (TypeError, ValueError) as error:
+                        raise PolicyRuntimeFault(str(error)) from error
+                return command
             finally:
                 self.latency_tracker.end_cycle()
 

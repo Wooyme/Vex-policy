@@ -1,0 +1,235 @@
+# G1 29-DOF parameters keyed by joint name; YAML entry order is irrelevant.
+# Angles/limits: rad; velocity: rad/s; action_scale: rad per unit action.
+# Startup gains: kp in N*m/rad, kd in N*m*s/rad.
+left_hip_pitch_joint:
+  default_dof_angle: -0.312
+  action_scale: 0.547546465219
+  stiff_startup_kp: 350.0
+  stiff_startup_kd: 5.0
+  lower: -2.5307
+  upper: 2.8798
+  velocity: 32.0
+left_hip_roll_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.350661466378
+  stiff_startup_kp: 200.0
+  stiff_startup_kd: 5.0
+  lower: -0.5236
+  upper: 2.9671
+  velocity: 32.0
+left_hip_yaw_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.547546465219
+  stiff_startup_kp: 200.0
+  stiff_startup_kd: 5.0
+  lower: -2.7576
+  upper: 2.7576
+  velocity: 32.0
+left_knee_joint:
+  default_dof_angle: 0.669
+  action_scale: 0.350661466378
+  stiff_startup_kp: 300.0
+  stiff_startup_kd: 10.0
+  lower: -0.0873
+  upper: 2.8798
+  velocity: 20.0
+left_ankle_pitch_joint:
+  default_dof_angle: -0.363
+  action_scale: 0.438577313919
+  stiff_startup_kp: 300.0
+  stiff_startup_kd: 5.0
+  lower: -0.8727
+  upper: 0.5236
+  velocity: 37.0
+left_ankle_roll_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.438577313919
+  stiff_startup_kp: 150.0
+  stiff_startup_kd: 5.0
+  lower: -0.2618
+  upper: 0.2618
+  velocity: 37.0
+right_hip_pitch_joint:
+  default_dof_angle: -0.312
+  action_scale: 0.547546465219
+  stiff_startup_kp: 350.0
+  stiff_startup_kd: 5.0
+  lower: -2.5307
+  upper: 2.8798
+  velocity: 32.0
+right_hip_roll_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.350661466378
+  stiff_startup_kp: 200.0
+  stiff_startup_kd: 5.0
+  lower: -2.9671
+  upper: 0.5236
+  velocity: 32.0
+right_hip_yaw_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.547546465219
+  stiff_startup_kp: 200.0
+  stiff_startup_kd: 5.0
+  lower: -2.7576
+  upper: 2.7576
+  velocity: 32.0
+right_knee_joint:
+  default_dof_angle: 0.669
+  action_scale: 0.350661466378
+  stiff_startup_kp: 300.0
+  stiff_startup_kd: 10.0
+  lower: -0.0873
+  upper: 2.8798
+  velocity: 20.0
+right_ankle_pitch_joint:
+  default_dof_angle: -0.363
+  action_scale: 0.438577313919
+  stiff_startup_kp: 300.0
+  stiff_startup_kd: 5.0
+  lower: -0.8727
+  upper: 0.5236
+  velocity: 37.0
+right_ankle_roll_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.438577313919
+  stiff_startup_kp: 150.0
+  stiff_startup_kd: 5.0
+  lower: -0.2618
+  upper: 0.2618
+  velocity: 37.0
+waist_yaw_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.547546465219
+  stiff_startup_kp: 200.0
+  stiff_startup_kd: 5.0
+  lower: -2.618
+  upper: 2.618
+  velocity: 32.0
+waist_roll_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.438577313919
+  stiff_startup_kp: 200.0
+  stiff_startup_kd: 5.0
+  lower: -0.52
+  upper: 0.52
+  velocity: 37.0
+waist_pitch_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.438577313919
+  stiff_startup_kp: 200.0
+  stiff_startup_kd: 5.0
+  lower: -0.52
+  upper: 0.52
+  velocity: 37.0
+left_shoulder_pitch_joint:
+  default_dof_angle: 0.2
+  action_scale: 0.438577313919
+  stiff_startup_kp: 40.0
+  stiff_startup_kd: 3.0
+  lower: -3.0892
+  upper: 2.6704
+  velocity: 37.0
+left_shoulder_roll_joint:
+  default_dof_angle: 0.2
+  action_scale: 0.438577313919
+  stiff_startup_kp: 40.0
+  stiff_startup_kd: 3.0
+  lower: -1.5882
+  upper: 2.2515
+  velocity: 37.0
+left_shoulder_yaw_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.438577313919
+  stiff_startup_kp: 40.0
+  stiff_startup_kd: 3.0
+  lower: -2.618
+  upper: 2.618
+  velocity: 37.0
+left_elbow_joint:
+  default_dof_angle: 0.6
+  action_scale: 0.438577313919
+  stiff_startup_kp: 40.0
+  stiff_startup_kd: 3.0
+  lower: -1.0472
+  upper: 2.0944
+  velocity: 37.0
+left_wrist_roll_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.438577313919
+  stiff_startup_kp: 40.0
+  stiff_startup_kd: 3.0
+  lower: -1.9722
+  upper: 1.9722
+  velocity: 37.0
+left_wrist_pitch_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.074500870329
+  stiff_startup_kp: 40.0
+  stiff_startup_kd: 3.0
+  lower: -1.6144
+  upper: 1.6144
+  velocity: 22.0
+left_wrist_yaw_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.074500870329
+  stiff_startup_kp: 40.0
+  stiff_startup_kd: 3.0
+  lower: -1.6144
+  upper: 1.6144
+  velocity: 22.0
+right_shoulder_pitch_joint:
+  default_dof_angle: 0.2
+  action_scale: 0.438577313919
+  stiff_startup_kp: 40.0
+  stiff_startup_kd: 3.0
+  lower: -3.0892
+  upper: 2.6704
+  velocity: 37.0
+right_shoulder_roll_joint:
+  default_dof_angle: -0.2
+  action_scale: 0.438577313919
+  stiff_startup_kp: 40.0
+  stiff_startup_kd: 3.0
+  lower: -2.2515
+  upper: 1.5882
+  velocity: 37.0
+right_shoulder_yaw_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.438577313919
+  stiff_startup_kp: 40.0
+  stiff_startup_kd: 3.0
+  lower: -2.618
+  upper: 2.618
+  velocity: 37.0
+right_elbow_joint:
+  default_dof_angle: 0.6
+  action_scale: 0.438577313919
+  stiff_startup_kp: 40.0
+  stiff_startup_kd: 3.0
+  lower: -1.0472
+  upper: 2.0944
+  velocity: 37.0
+right_wrist_roll_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.438577313919
+  stiff_startup_kp: 40.0
+  stiff_startup_kd: 3.0
+  lower: -1.9722
+  upper: 1.9722
+  velocity: 37.0
+right_wrist_pitch_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.074500870329
+  stiff_startup_kp: 40.0
+  stiff_startup_kd: 3.0
+  lower: -1.6144
+  upper: 1.6144
+  velocity: 22.0
+right_wrist_yaw_joint:
+  default_dof_angle: 0.0
+  action_scale: 0.074500870329
+  stiff_startup_kp: 40.0
+  stiff_startup_kd: 3.0
+  lower: -1.6144
+  upper: 1.6144
+  velocity: 22.0
