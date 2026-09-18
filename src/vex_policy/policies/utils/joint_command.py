@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .base import PolicyJointCommand
+from vex_policy.policies.base import PolicyJointCommand
 
 
 def position_command(q, kp, kd, controlled_joints) -> PolicyJointCommand:

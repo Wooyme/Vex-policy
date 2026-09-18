@@ -21,9 +21,9 @@ from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.latency import LatencyStage
 
 from .base import BasePolicy, PolicyRuntimeFault
-from .inference import OnnxActor, resolve_control_gains
-from .joint_command import PositionAction, position_command
-from .locomotion_utils import RightAnkleKinematics, load_motion_last_pose
+from vex_policy.policies.utils.inference import OnnxActor, resolve_control_gains
+from vex_policy.policies.utils.joint_command import PositionAction, position_command
+from vex_policy.policies.utils.locomotion_utils import RightAnkleKinematics, load_motion_last_pose
 from .observations import ObservationHistory, robot_observation_terms
 
 

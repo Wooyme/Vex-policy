@@ -7,7 +7,7 @@ import pytest
 
 from vex_policy.config.config_types import PolicySpec, WbtTaskConfig
 from vex_policy.policies.base import BasePolicy
-from vex_policy.policies.joint_command import PositionAction
+from vex_policy.policies.utils.joint_command import PositionAction
 from vex_policy.policies.observations import ObservationHistory
 from vex_policy.policies.wbt import WbtStage, WholeBodyTrackingPolicy
 from vex_policy.sdk.base.base_interface import LowState

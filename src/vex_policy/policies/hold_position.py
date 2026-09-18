@@ -8,7 +8,7 @@ from vex_policy.config.config_types import HoldPositionTaskConfig, InferenceConf
 from vex_policy.sdk.base.base_interface import LowState
 
 from .base import BasePolicy, PolicyJointCommand
-from .joint_command import position_command
+from vex_policy.policies.utils.joint_command import position_command
 
 
 class HoldPositionPolicy(BasePolicy):

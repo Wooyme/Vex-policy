@@ -34,7 +34,7 @@ uv run vex-policy \
   --interface eth0 \
   --sdk-log-dir logs/sdk
 ```
-
+ 
 `--sdk-log-dir` 未指定时关闭 SDK 高频日志。启用后，每次运行会在目标目录创建独立会话目录，后台线程将
 应用层 `get_low_state` 的返回值（包括空读）和应用层最终传给 `write_low_command` 的 motor-order 命令写成
 5 秒一个的压缩 `chunk_*.npz`。它记录的是 Python API 调用，不是 SDK 内部每个 DDS 收发包；默认 50 Hz 控制

@@ -13,7 +13,7 @@ from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.joint_interpolation import JointPositionInterpolator
 
 from .base import BasePolicy, PolicyJointCommand, PolicyRuntimeFault
-from .joint_command import position_command
+from vex_policy.policies.utils.joint_command import position_command
 
 
 def load_motion_pose(

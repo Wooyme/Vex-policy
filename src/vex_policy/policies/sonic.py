@@ -13,8 +13,8 @@ from loguru import logger
 from vex_policy.config.config_types import InferenceConfig, SonicTaskConfig
 from vex_policy.config.config_types.control import input_parameters
 from vex_policy.policies.base import BasePolicy
-from vex_policy.policies.inference import resolve_control_gains, shared_session
-from vex_policy.policies.joint_command import position_command
+from vex_policy.policies.utils.inference import resolve_control_gains, shared_session
+from vex_policy.policies.utils.joint_command import position_command
 from vex_policy.policies.sonic_motion import load_motion_directory
 from vex_policy.policies.sonic_planner import (
     HW_TO_POLICY,

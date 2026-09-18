@@ -20,8 +20,8 @@ from vex_policy.config.config_types import (
 )
 from vex_policy.policies.base import BasePolicy, PolicyJointCommand, PolicyRuntimeFault
 from vex_policy.policies.guard.ufo import UfoGuard
-from vex_policy.policies.inference import shared_session
-from vex_policy.policies.joint_command import position_command
+from vex_policy.policies.utils.inference import shared_session
+from vex_policy.policies.utils.joint_command import position_command
 from vex_policy.policies.sonic_planner import ort_providers
 from vex_policy.robots import G1_JOINT_LOWER, G1_JOINT_UPPER, G1_JOINT_VELOCITY
 from vex_policy.robots.g1 import DOF_NAMES

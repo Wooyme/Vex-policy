@@ -12,10 +12,10 @@ from termcolor import colored
 from vex_policy.config.config_types.inference import InferenceConfig
 from vex_policy.policies.base import BasePolicy, PolicyRuntimeFault
 from vex_policy.policies.guard.wbt import WbtGuard
-from vex_policy.policies.inference import load_metadata, resolve_control_gains
-from vex_policy.policies.joint_command import PositionAction, position_command
+from vex_policy.policies.utils.inference import load_metadata, resolve_control_gains
+from vex_policy.policies.utils.joint_command import PositionAction, position_command
 from vex_policy.policies.observations import ObservationHistory
-from vex_policy.policies.wbt_utils import MotionClockUtil, NpzTargetSource, PinocchioRobot, TimestepUtil
+from vex_policy.policies.utils.wbt_utils import MotionClockUtil, NpzTargetSource, PinocchioRobot, TimestepUtil
 from vex_policy.robots import G1_JOINT_LOWER, G1_JOINT_UPPER, G1_JOINT_VELOCITY
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.clock import ClockSub

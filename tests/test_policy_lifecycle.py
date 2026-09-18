@@ -11,8 +11,8 @@ import pytest
 from vex_policy.config.config_types import HoldPositionTaskConfig, InferenceConfig, ObservationConfig
 from vex_policy.policies.base import BasePolicy, PolicyLifecycleState, PolicyRuntimeFault
 from vex_policy.policies.hold_position import HoldPositionPolicy
-from vex_policy.policies.inference import resolve_control_gains, shared_session
-from vex_policy.policies.joint_command import PositionAction, position_command
+from vex_policy.policies.utils.inference import resolve_control_gains, shared_session
+from vex_policy.policies.utils.joint_command import PositionAction, position_command
 from vex_policy.policies.observations import ObservationHistory
 from vex_policy.robots import G1_29DOF
 from vex_policy.sdk.base.base_interface import LowState

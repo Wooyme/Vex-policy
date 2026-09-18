@@ -6,8 +6,8 @@ from vex_policy.inputs.api.commands import VelCmd
 from vex_policy.utils.latency import LatencyStage
 
 from .base import BasePolicy
-from .inference import OnnxActor, resolve_control_gains
-from .joint_command import PositionAction, position_command
+from vex_policy.policies.utils.inference import OnnxActor, resolve_control_gains
+from vex_policy.policies.utils.joint_command import PositionAction, position_command
 from .observations import ObservationHistory, robot_observation_terms
 
 
