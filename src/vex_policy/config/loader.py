@@ -14,7 +14,6 @@ from vex_policy.config.config_types import (
     InferenceConfig,
     InterpolationTaskConfig,
     MqttConfig,
-    PelvisRecoveryTaskConfig,
     PolicySpec,
     RobotRuntimeConfig,
     RuntimeConfig,
@@ -114,14 +113,6 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             if spec.task.action_mask_path is not None:
                 raise ValueError(f"UFO policy {spec.name!r} does not support action masks")
             path_fields.append("model_config")
-        if spec.implementation == "pelvis_recovery":
-            if not isinstance(spec.task, PelvisRecoveryTaskConfig):
-                raise ValueError(f"Policy {spec.name!r} requires PelvisRecoveryTaskConfig")
-            if not isinstance(spec.guard, GuardConfig):
-                raise ValueError(f"Policy {spec.name!r} requires GuardConfig")
-            if spec.type != "full_body" or spec.task.action_mask_path is not None:
-                raise ValueError(f"Pelvis recovery policy {spec.name!r} requires full_body without action masks")
-            path_fields.append("motion_data_path")
         resolved_paths: dict[str, str] = {}
         for field_name in path_fields:
             model_path = getattr(spec.task, field_name, None)

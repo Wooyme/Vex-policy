@@ -59,7 +59,7 @@ task:
   desired_base_height: 0.75
   residual_upper_body_action: false
   print_observations: false
-  motion_data_path: reference/standup2lyingback/standup2lyingback.npz
+  motion_data_path: reference/ridding1.npz
   motion_start_timestep: 0
   motion_end_timestep: null
   motion_loop: false

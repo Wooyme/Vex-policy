@@ -14,7 +14,6 @@ from .safety import EmergencyStopConfig, LimiterConfig
 from .task import (
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
-    PelvisRecoveryTaskConfig,
     SonicTaskConfig,
     TaskConfig,
     UfoTaskConfig,
@@ -78,7 +77,6 @@ class PolicySpec(StrictModel):
         | HoldPositionTaskConfig
         | InterpolationTaskConfig
         | UfoTaskConfig
-        | PelvisRecoveryTaskConfig
     )
     guard: GuardConfig | None = None
     limiter: LimiterConfig | None = None
@@ -95,7 +93,6 @@ class PolicySpec(StrictModel):
             "sonic": SonicTaskConfig,
             "ufo": UfoTaskConfig,
             "waist_locomotion": WaistLocomotionTaskConfig,
-            "pelvis_recovery": PelvisRecoveryTaskConfig,
             "wbt": WbtTaskConfig,
         }
         implementation = value.get("implementation")

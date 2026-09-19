@@ -13,7 +13,7 @@ inputs:
 - type: slider
   parameter: {name: z, min: -1.0, max: 1.0, default: 0.0}
 - type: slider
-  parameter: {name: height_delta, min: -0.5, max: 0.5, default: 0.0}
+  parameter: {name: height_delta, min: -0.2, max: 0.1, default: 0.0}
 observation:
   obs_dict:
     actor_obs:
@@ -59,7 +59,7 @@ task:
   desired_base_height: 0.75
   residual_upper_body_action: false
   print_observations: false
-  motion_data_path: reference/standup2kneeling/standup2kneeling.npz
+  motion_data_path: reference/doggy1.npz
   motion_start_timestep: 0
   motion_end_timestep: null
   motion_loop: false
