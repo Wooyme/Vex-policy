@@ -2,7 +2,6 @@ from .base import BasePolicy
 from .hold_position import HoldPositionPolicy
 from .interpolation import InterpolationPolicy
 from .locomotion import LocomotionPolicy
-from .passive_locomotion import PassiveLocomotionPolicy
 from .pelvis_recovery import PelvisRecoveryPolicy
 from .sonic import SonicPolicy
 from .ufo import UfoPolicy
@@ -14,7 +13,6 @@ __all__ = [
     "HoldPositionPolicy",
     "InterpolationPolicy",
     "LocomotionPolicy",
-    "PassiveLocomotionPolicy",
     "PelvisRecoveryPolicy",
     "SonicPolicy",
     "UfoPolicy",

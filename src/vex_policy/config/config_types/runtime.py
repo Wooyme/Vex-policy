@@ -14,7 +14,6 @@ from .safety import EmergencyStopConfig, LimiterConfig
 from .task import (
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
-    PassiveLocomotionTaskConfig,
     PelvisRecoveryTaskConfig,
     SonicTaskConfig,
     TaskConfig,
@@ -79,7 +78,6 @@ class PolicySpec(StrictModel):
         | HoldPositionTaskConfig
         | InterpolationTaskConfig
         | UfoTaskConfig
-        | PassiveLocomotionTaskConfig
         | PelvisRecoveryTaskConfig
     )
     guard: GuardConfig | None = None
@@ -97,7 +95,6 @@ class PolicySpec(StrictModel):
             "sonic": SonicTaskConfig,
             "ufo": UfoTaskConfig,
             "waist_locomotion": WaistLocomotionTaskConfig,
-            "passive_locomotion": PassiveLocomotionTaskConfig,
             "pelvis_recovery": PelvisRecoveryTaskConfig,
             "wbt": WbtTaskConfig,
         }

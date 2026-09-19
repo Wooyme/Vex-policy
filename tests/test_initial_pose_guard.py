@@ -179,12 +179,11 @@ def test_wbt_reference_link_to_base_with_real_fk():
     )[0]
 
 
-@pytest.mark.parametrize("implementation", ["ufo", "waist_locomotion", "passive_locomotion", "wbt"])
+@pytest.mark.parametrize("implementation", ["ufo", "waist_locomotion", "wbt"])
 def test_unified_yaml_guard_config(implementation):
     examples = {
         "ufo": "configs/examples/ufo/g1_ufo_goal.yaml",
         "waist_locomotion": "configs/examples/g1_waist_locomotion.yaml",
-        "passive_locomotion": "configs/g1/g1_passive_locomotion.yaml",
         "wbt": "configs/examples/holosoma/g1_ppo_wbt_dancing.yaml",
     }
     data = yaml.safe_load((Path(__file__).resolve().parents[1] / examples[implementation]).read_text())

@@ -12,7 +12,6 @@ from .safety import EmergencyStopConfig, LimiterConfig
 from .task import (
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
-    PassiveLocomotionTaskConfig,
     PelvisRecoveryTaskConfig,
     SonicTaskConfig,
     TaskConfig,
@@ -35,7 +34,6 @@ class InferenceConfig:
         | HoldPositionTaskConfig
         | InterpolationTaskConfig
         | UfoTaskConfig
-        | PassiveLocomotionTaskConfig
         | PelvisRecoveryTaskConfig
     )
     guard: GuardConfig | None = None
