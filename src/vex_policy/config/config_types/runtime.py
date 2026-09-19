@@ -15,6 +15,7 @@ from .task import (
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
     PassiveLocomotionTaskConfig,
+    PelvisRecoveryTaskConfig,
     SonicTaskConfig,
     TaskConfig,
     UfoTaskConfig,
@@ -79,6 +80,7 @@ class PolicySpec(StrictModel):
         | InterpolationTaskConfig
         | UfoTaskConfig
         | PassiveLocomotionTaskConfig
+        | PelvisRecoveryTaskConfig
     )
     guard: GuardConfig | None = None
     limiter: LimiterConfig | None = None
@@ -96,6 +98,7 @@ class PolicySpec(StrictModel):
             "ufo": UfoTaskConfig,
             "waist_locomotion": WaistLocomotionTaskConfig,
             "passive_locomotion": PassiveLocomotionTaskConfig,
+            "pelvis_recovery": PelvisRecoveryTaskConfig,
             "wbt": WbtTaskConfig,
         }
         implementation = value.get("implementation")

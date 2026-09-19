@@ -356,6 +356,57 @@ ONNX 内嵌 URDF 的 FK 和 IMU 投影重力计算。URDF 中的 `hip_bar_yaw_jo
 并限制到 G1 关节范围。该类型仅支持 `full_body`，不接受 action mask。运行中非法状态、观测、
 动作或推理错误会触发现有全局锁存，本周期不写入机器人命令。
 
+## Pelvis recovery
+
+Holosoma 当前 `g1_29dof_pelvis_recovery` 使用独立的 `implementation: pelvis_recovery`。
+示例为 `configs/g1/g1_pelvis_recovery.yaml`，需要提供相应训练模型后运行：
+
+```bash
+uv run vex-policy --config configs/g1/g1_pelvis_recovery.yaml --interface eth0
+```
+
+`model_path` 默认指向 `models/loco/g1_29dof/ppo_pelvis_recovery.onnx`，模型权重不随代码提供。
+模型必须为 float32 `actor_obs[1,99] → action[1,29]`，包含同序的 `dof_names`、
+`action_scale=0.25`（标量或 29 维）、原始 `kp/kd` 和 `robot_urdf` 元数据。
+必须使用包含绝对目标高度的五维 command 重新训练、导出的模型；旧 98 维模型不兼容，加载时会被拒绝。
+
+单帧观测按字母排序为 `base_angular_velocity(3)`、`base_orientation(4)`、`command(5)`、
+`joint_position(29)`、`joint_velocity(29)`、`previous_action(29)`。角速度乘 0.25，关节速度
+乘 0.05，最终观测限制在 ±100。上一帧动作保存裁剪前的模型输出。参考 NPZ 最后一帧提供
+关节残差零位和根倾斜姿态；启动时只绕世界 Z 轴对齐参考朝向，随后保持该参考不变。
+相对四元数采用 XYZW，并统一为非负 W。
+
+| 参数 | 含义 | 范围 | 默认值 |
+| --- | --- | --- | --- |
+| `peak_speed` | 峰值恢复速度，m/s | 0.05–0.30 | 0.175 |
+| `target_height` | 骨盆世界坐标目标高度，m | 0.15–0.25 | 0.20 |
+
+高度估计复用 `RightAnkleKinematics`，由 ONNX URDF、关节角和 IMU 重力方向计算骨盆相对
+右踝的竖直距离，再加 `task.right_ankle_height_m` 得到骨盆世界高度估计；不使用 Unitree
+接口中固定为零的 `base_pos`。该参数应填入 `right_ankle_roll_link` 原点的实际世界 Z，
+默认 0.0 表示不补偿，并非实测标定值。目标与补偿须采用同一个地面零点；右踝移动时固定
+补偿仍会有估计误差。command 为 `[目标高度−估计高度, 期望速度, sin(phase), cos(phase),
+目标高度]`；期望速度为 `peak_speed*tanh(max(error,0)/0.03)`，从零开始，
+以 0.5 m/s² 限制变化率。相位随实际高度进度变化，受压时可回退；零行程使用 0.03 m
+作为进度分母。改变 `target_height` 时以最近高度重新建立起点并重置速度，改变
+`peak_speed` 时继续平滑更新。当前高度高于目标时不生成向下速度指令。
+
+示例目标范围与上游 `command.py` 的 `[0.15, 0.25]` 一致，默认取中点 0.20 m。
+示例参考路径指向 Holosoma 的 `ridding1.npz`，其内容与本仓库同名文件不同；应配置为实际训练的
+`--robot.init-state.reference-pose-file`。模型和参考路径均相对进程工作目录解析。
+
+仅支持 50 Hz、G1 29 关节 `full_body`，不接受 action mask。启动采用 `InitialPoseGuard`，
+示例对普通关节允许 1.0 rad、髋 pitch 0.75 rad、腰 pitch 0.6 rad，投影重力差允许 0.6；
+检查通过后直接推理。目标达到后持续控制，由现有运行时负责停用或切换；重新激活清空恢复状态。
+
+下发动作裁剪至 ±100 后乘 0.25 并叠加参考关节角，与当前上游 action 一致，不再对五个
+桥式关节额外施加 ±0.5 rad 偏移或关节角限幅。腰 pitch、双侧髋 pitch、双侧膝关节仍对
+原始增益应用一次 `Kp×0.35、Kd×0.6`，其余关节保持原位置 PD；显式机器人增益覆盖同样
+被视作原始增益。Holosoma 当前 PPO 导出的增益来自机器人配置，尚未包含 action term 的弱化。
+上游五关节额外总力矩限幅目前已停用；其通用 PD 总力矩裁剪与本项目向硬件下发位置及增益
+的方式仍有区别，本适配不在软件侧重现该总力矩裁剪。
+非法状态、观测、动作和推理异常进入现有全局锁存，本周期不下发命令。
+
 ## Enhanced inputs
 
 每个 policy 的 `inputs` 是有序的 UI 组件数组，控制面板按 `type` 自动渲染。`joystick` 同时声明明确的

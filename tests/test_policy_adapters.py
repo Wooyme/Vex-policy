@@ -23,7 +23,7 @@ from vex_policy.config.config_types import (
 )
 from vex_policy.policies import sonic, waist_locomotion, wbt
 from vex_policy.policies.locomotion import LocomotionPolicy
-from vex_policy.policies.sonic_planner import HW_TO_POLICY, MotionSequence
+from vex_policy.policies.utils.sonic_planner import HW_TO_POLICY, MotionSequence
 from vex_policy.robots import G1_29DOF, G1_JOINT_LOWER, G1_JOINT_UPPER
 from vex_policy.sdk.base.base_interface import LowState
 

@@ -13,6 +13,7 @@ from .task import (
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
     PassiveLocomotionTaskConfig,
+    PelvisRecoveryTaskConfig,
     SonicTaskConfig,
     TaskConfig,
     UfoTaskConfig,
@@ -35,6 +36,7 @@ class InferenceConfig:
         | InterpolationTaskConfig
         | UfoTaskConfig
         | PassiveLocomotionTaskConfig
+        | PelvisRecoveryTaskConfig
     )
     guard: GuardConfig | None = None
     action_mask: ActionMaskConfig | None = None

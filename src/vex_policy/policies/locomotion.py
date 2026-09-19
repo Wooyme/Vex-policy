@@ -8,7 +8,7 @@ from vex_policy.utils.latency import LatencyStage
 from .base import BasePolicy
 from vex_policy.policies.utils.inference import OnnxActor, resolve_control_gains
 from vex_policy.policies.utils.joint_command import PositionAction, position_command
-from .observations import ObservationHistory, robot_observation_terms
+from vex_policy.policies.utils.observations import ObservationHistory, robot_observation_terms
 
 
 class LocomotionPolicy(BasePolicy):

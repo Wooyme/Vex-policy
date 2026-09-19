@@ -20,7 +20,7 @@ from vex_policy.config.config_types import (
 )
 from vex_policy.policies.base import BasePolicy, PolicyJointCommand, PolicyRuntimeFault
 from vex_policy.policies.guard.initial_pose import InitialPoseGuard
-from vex_policy.policies.sonic_planner import ort_providers
+from vex_policy.policies.utils.sonic_planner import ort_providers
 from vex_policy.policies.utils.inference import shared_session
 from vex_policy.policies.utils.initial_pose import InitialPose
 from vex_policy.policies.utils.joint_command import position_command

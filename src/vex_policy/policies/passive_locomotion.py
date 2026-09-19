@@ -24,7 +24,7 @@ from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.latency import LatencyStage
 
 from .base import BasePolicy, PolicyRuntimeFault
-from .observations import ObservationHistory, robot_observation_terms
+from vex_policy.policies.utils.observations import ObservationHistory, robot_observation_terms
 
 
 class PassiveLocomotionPolicy(BasePolicy):

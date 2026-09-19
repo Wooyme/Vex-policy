@@ -15,7 +15,7 @@ from vex_policy.config.config_types import (
 from vex_policy.config.loader import load_runtime_config, resolve_policies
 from vex_policy.policies.base import PolicyRuntimeFault
 from vex_policy.policies.interpolation import InterpolationPolicy, load_motion_pose
-from vex_policy.policies.policy_state_machine import _policy_class
+from vex_policy.policy_state_machine import _policy_class
 from vex_policy.robots import G1_29DOF, G1_JOINT_LOWER, G1_JOINT_UPPER, G1_JOINT_VELOCITY
 from vex_policy.sdk.base.base_interface import LowState
 

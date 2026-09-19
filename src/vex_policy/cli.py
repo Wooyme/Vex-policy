@@ -9,7 +9,7 @@ from pathlib import Path
 from loguru import logger
 
 from vex_policy.config import load_runtime_config, resolve_policies
-from vex_policy.policies.policy_state_machine import PolicyStateMachine
+from vex_policy.policy_state_machine import PolicyStateMachine
 from vex_policy.sdk import HighFrequencyLogConfig, InterfaceManager
 
 

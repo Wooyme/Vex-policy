@@ -14,7 +14,7 @@ from vex_policy.config.config_types import (
     RuntimeConfig,
 )
 from vex_policy.policies.base import BasePolicy, PolicyRuntimeFault
-from vex_policy.policies.policy_state_machine import PolicyStateMachine
+from vex_policy.policy_state_machine import PolicyStateMachine
 from vex_policy.policies.utils.joint_command import position_command
 from vex_policy.robots import G1_29DOF
 from vex_policy.sdk.base.base_interface import LowState

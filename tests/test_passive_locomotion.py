@@ -16,7 +16,7 @@ from vex_policy.config import load_runtime_config, resolve_policies
 from vex_policy.config.config_types import GuardConfig, PassiveLocomotionTaskConfig
 from vex_policy.policies.base import PolicyRuntimeFault
 from vex_policy.policies.passive_locomotion import PassiveLocomotionPolicy
-from vex_policy.policies.policy_state_machine import PolicyStateMachine
+from vex_policy.policy_state_machine import PolicyStateMachine
 from vex_policy.robots import G1_29DOF, G1_JOINT_LOWER, G1_JOINT_UPPER
 from vex_policy.sdk.base.base_interface import LowState
 

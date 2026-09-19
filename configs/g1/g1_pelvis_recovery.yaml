@@ -1,0 +1,51 @@
+name: g1-pelvis-recovery
+implementation: pelvis_recovery
+type: full_body
+inputs:
+  - type: slider
+    parameter: {name: peak_speed, min: 0.05, max: 0.30, default: 0.175}
+  - type: slider
+    # World-frame pelvis Z, matching the upstream training range (meters).
+    parameter: {name: target_height, min: 0.15, max: 0.25, default: 0.20}
+observation:
+  obs_dict:
+    actor_obs:
+      - base_angular_velocity
+      - base_orientation
+      - command
+      - joint_position
+      - joint_velocity
+      - previous_action
+  obs_dims:
+    base_angular_velocity: 3
+    base_orientation: 4
+    command: 5
+    joint_position: 29
+    joint_velocity: 29
+    previous_action: 29
+  obs_scales:
+    base_angular_velocity: 0.25
+    base_orientation: 1.0
+    command: 1.0
+    joint_position: 1.0
+    joint_velocity: 0.05
+    previous_action: 1.0
+  history_length_dict:
+    actor_obs: 1
+task:
+  # Requires a retrained 99-input model with the five-element recovery command.
+  model_path: models/loco/g1_29dof/ppo_pelvis_recovery.onnx
+  motion_data_path: ../../holosoma/src/holosoma/holosoma/data/motions/g1_29dof/ridding1_up.npz
+  rl_rate: 50.0
+  policy_action_scale: 0.25
+  # Set to the measured world-Z of right_ankle_roll_link's origin (meters).
+  # Pelvis world height = FK pelvis-minus-ankle height + this compensation.
+  right_ankle_height_m: 0.0
+  print_observations: false
+guard:
+  startup_joint_tolerance_rad: 1.0
+  startup_joint_tolerances_rad:
+    left_hip_pitch_joint: 0.75
+    right_hip_pitch_joint: 0.75
+    waist_pitch_joint: 0.6
+  startup_gravity_tolerance: 0.6

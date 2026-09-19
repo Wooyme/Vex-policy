@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from vex_policy.policies.base import PolicyJointCommand, PolicyRuntimeFault
-from vex_policy.policies.policy_state_machine import PolicyState, PolicyStateMachine
+from vex_policy.policy_state_machine import PolicyState, PolicyStateMachine
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.sdk.interface_manager import InterfaceManager
 
@@ -389,7 +389,7 @@ def test_runtime_exit_closes_all_resources_despite_individual_failures(failure_a
 
 
 def test_partial_runtime_construction_closes_preloaded_policies_and_transport(monkeypatch):
-    from vex_policy.policies import policy_state_machine as runtime_module
+    from vex_policy import policy_state_machine as runtime_module
 
     events = []
 

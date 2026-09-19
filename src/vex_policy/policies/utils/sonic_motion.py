@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from vex_policy.policies.sonic_planner import MotionSequence
+from vex_policy.policies.utils.sonic_planner import MotionSequence
 
 _REQUIRED_FILES = ("joint_pos.csv", "joint_vel.csv", "body_pos.csv", "body_quat.csv")
 

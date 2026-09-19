@@ -12,7 +12,7 @@ from termcolor import colored
 from vex_policy.config.config_types.inference import InferenceConfig
 from vex_policy.policies.base import BasePolicy, PolicyRuntimeFault
 from vex_policy.policies.guard.initial_pose import InitialPoseGuard
-from vex_policy.policies.observations import ObservationHistory
+from vex_policy.policies.utils.observations import ObservationHistory
 from vex_policy.policies.utils.inference import load_metadata, resolve_control_gains
 from vex_policy.policies.utils.initial_pose import InitialPose, normalize_quaternion_wxyz
 from vex_policy.policies.utils.joint_command import PositionAction, position_command

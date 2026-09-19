@@ -15,8 +15,8 @@ from vex_policy.config.config_types.control import input_parameters
 from vex_policy.policies.base import BasePolicy
 from vex_policy.policies.utils.inference import resolve_control_gains, shared_session
 from vex_policy.policies.utils.joint_command import position_command
-from vex_policy.policies.sonic_motion import load_motion_directory
-from vex_policy.policies.sonic_planner import (
+from vex_policy.policies.utils.sonic_motion import load_motion_directory
+from vex_policy.policies.utils.sonic_planner import (
     HW_TO_POLICY,
     MODE_NAMES,
     ONE_SHOT_MODES,
