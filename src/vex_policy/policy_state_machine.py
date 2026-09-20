@@ -18,6 +18,7 @@ from vex_policy.policies.base import BasePolicy, PolicyRuntimeFault
 from vex_policy.policies.hold_position import HoldPositionPolicy
 from vex_policy.policies.interpolation import InterpolationPolicy
 from vex_policy.policies.locomotion import LocomotionPolicy
+from vex_policy.policies.pelvis_recovery import PelvisRecoveryPolicy
 from vex_policy.policies.sonic import SonicPolicy
 from vex_policy.policies.ufo import UfoPolicy
 from vex_policy.policies.waist_locomotion import WaistLocomotionPolicy
@@ -43,6 +44,8 @@ def _policy_class(kind: str) -> type[BasePolicy]:
         return SonicPolicy
     if kind == "ufo":
         return UfoPolicy
+    if kind == "pelvis_recovery":
+        return PelvisRecoveryPolicy
     if kind == "waist_locomotion":
         return WaistLocomotionPolicy
     raise ValueError(f"Unknown policy kind: {kind}")

@@ -103,6 +103,27 @@ class WaistLocomotionTaskConfig(TaskConfig):
             raise ValueError("motion_data_path must not be empty")
 
 
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class PelvisRecoveryTaskConfig(TaskConfig):
+    """Height-feedback recovery with right-ankle support height estimation."""
+
+    rl_rate: float = Field(default=50.0, gt=0.0, allow_inf_nan=False)
+    policy_action_scale: float = Field(default=0.25, gt=0.0, allow_inf_nan=False)
+    use_phase: bool = False
+    auto_walk_on_vel_cmd: bool = False
+    slowdown_height_m: float = Field(default=0.03, gt=0.0, allow_inf_nan=False)
+    max_acceleration_m_s2: float = Field(default=0.5, gt=0.0, allow_inf_nan=False)
+    right_ankle_height_m: float = Field(default=0.035, ge=0.0, allow_inf_nan=False)
+    bridge_kp_scale: float = Field(default=0.35, gt=0.0, le=1.0, allow_inf_nan=False)
+    bridge_kd_scale: float = Field(default=0.6, gt=0.0, le=1.0, allow_inf_nan=False)
+
+    def __post_init__(self) -> None:
+        if not self.motion_data_path or not self.motion_data_path.strip():
+            raise ValueError("motion_data_path must not be empty")
+        if self.use_phase or self.action_scales_by_effort_limit_over_p_gain or self.residual_upper_body_action:
+            raise ValueError("Pelvis recovery requires unphased reference-relative position actions")
+
+
 class UfoContextBase(BaseModel):
     """Strict local latent-context configuration for a UFO policy."""
 

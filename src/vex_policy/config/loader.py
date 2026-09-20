@@ -14,6 +14,7 @@ from vex_policy.config.config_types import (
     InferenceConfig,
     InterpolationTaskConfig,
     MqttConfig,
+    PelvisRecoveryTaskConfig,
     PolicySpec,
     RobotRuntimeConfig,
     RuntimeConfig,
@@ -103,6 +104,8 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             raise ValueError(f"Policy {spec.name!r} requires WaistLocomotionTaskConfig")
         elif spec.implementation == "waist_locomotion" and not isinstance(spec.guard, GuardConfig):
             raise ValueError(f"Policy {spec.name!r} requires GuardConfig")
+        elif spec.implementation == "pelvis_recovery" and not isinstance(spec.task, PelvisRecoveryTaskConfig):
+            raise ValueError(f"Policy {spec.name!r} requires PelvisRecoveryTaskConfig")
         elif spec.implementation == "wbt" and not isinstance(spec.task, WbtTaskConfig):
             raise ValueError(f"Policy {spec.name!r} requires WbtTaskConfig")
         elif spec.implementation == "ufo":
@@ -142,7 +145,7 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             if not motion_directory.is_dir():
                 raise ValueError(f"Policy {spec.name!r} motion directory does not exist: {motion_directory}")
             resolved_paths["motion_data_path"] = str(motion_directory)
-        if isinstance(spec.task, WaistLocomotionTaskConfig):
+        if isinstance(spec.task, (WaistLocomotionTaskConfig, PelvisRecoveryTaskConfig)):
             motion_data_path = Path(spec.task.motion_data_path).expanduser().resolve()
             if not motion_data_path.is_file():
                 raise ValueError(f"Policy {spec.name!r} motion file does not exist: {motion_data_path}")

@@ -19,43 +19,13 @@ from vex_policy.policies.utils.inference import OnnxActor, resolve_control_gains
 from vex_policy.policies.utils.joint_command import PositionAction, position_command
 from vex_policy.policies.utils.locomotion_utils import RightAnkleKinematics
 from vex_policy.policies.utils.locomotion_utils import load_motion_last_pose as load_waist_motion_last_pose
+from vex_policy.policies.utils.locomotion_utils import relative_rotation_vector as _relative_rotation_vector
+from vex_policy.policies.utils.observations import ObservationHistory, robot_observation_terms
 from vex_policy.robots import G1_JOINT_LOWER, G1_JOINT_UPPER
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.latency import LatencyStage
 
 from .base import BasePolicy, PolicyRuntimeFault
-from vex_policy.policies.utils.observations import ObservationHistory, robot_observation_terms
-
-
-def _quat_to_rotation_vector(quaternion_wxyz: np.ndarray) -> np.ndarray:
-    """Convert normalized WXYZ quaternions to shortest-path rotation vectors."""
-    quaternion = np.asarray(quaternion_wxyz, dtype=np.float64)
-    quaternion *= np.where(quaternion[:, :1] < 0.0, -1.0, 1.0)
-    vector = quaternion[:, 1:]
-    magnitude = np.linalg.norm(vector, axis=1)
-    half_angle = np.arctan2(magnitude, quaternion[:, 0])
-    angle = 2.0 * half_angle
-    scale = np.empty_like(angle)
-    regular = np.abs(angle) > 1e-8
-    scale[regular] = angle[regular] / np.sin(half_angle[regular])
-    scale[~regular] = 1.0 / (0.5 - angle[~regular] ** 2 / 48.0)
-    return vector * scale[:, None]
-
-
-def _relative_rotation_vector(initial_wxyz: np.ndarray, current_wxyz: np.ndarray) -> np.ndarray:
-    """Return ``initial^-1 * current`` as a shortest-path rotation vector."""
-    initial_scalar, initial_vector = initial_wxyz[:, :1], initial_wxyz[:, 1:]
-    current_scalar, current_vector = current_wxyz[:, :1], current_wxyz[:, 1:]
-    relative_quat = np.concatenate(
-        (
-            initial_scalar * current_scalar + np.sum(initial_vector * current_vector, axis=1, keepdims=True),
-            initial_scalar * current_vector
-            - current_scalar * initial_vector
-            - np.cross(initial_vector, current_vector),
-        ),
-        axis=1,
-    )
-    return _quat_to_rotation_vector(relative_quat)
 
 
 class WaistLocomotionPolicy(BasePolicy):

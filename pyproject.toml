@@ -59,6 +59,7 @@ wbt = "vex_policy.policies.wbt:WholeBodyTrackingPolicy"
 sonic = "vex_policy.policies.sonic:SonicPolicy"
 ufo = "vex_policy.policies.ufo:UfoPolicy"
 waist_locomotion = "vex_policy.policies.waist_locomotion:WaistLocomotionPolicy"
+pelvis_recovery = "vex_policy.policies.pelvis_recovery:PelvisRecoveryPolicy"
 
 [tool.setuptools.packages.find]
 where = ["src"]

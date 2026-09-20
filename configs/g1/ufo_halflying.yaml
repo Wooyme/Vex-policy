@@ -44,7 +44,7 @@ task:
   model_config: models/ufo/policy.yaml
   context:
     type: goal
-    path: models/ufo/goal_reaching.pkl
+    path: models/ufo/goal_reaching_v920.pkl
     name: fallAndGetUp1_subject4_3773
   action_mask_path: null
   rl_rate: 50.0

@@ -1,0 +1,52 @@
+name: g1-pelvis-recovery
+implementation: pelvis_recovery
+type: full_body
+inputs:
+- type: slider
+  parameter: {name: target_height, min: 0.15, max: 0.25, default: 0.15}
+- type: slider
+  parameter: {name: peak_speed, min: 0.05, max: 0.30, default: 0.1}
+observation:
+  obs_dict:
+    actor_obs:
+    - actions
+    - base_ang_vel
+    - base_right_foot_height_difference
+    - dof_pos
+    - dof_vel
+    - pelvis_orientation_error
+    - pelvis_recovery_command
+    - projected_gravity
+  obs_dims:
+    actions: 29
+    base_ang_vel: 3
+    base_right_foot_height_difference: 1
+    dof_pos: 29
+    dof_vel: 29
+    pelvis_orientation_error: 3
+    pelvis_recovery_command: 2
+    projected_gravity: 3
+  obs_scales:
+    actions: 1.0
+    base_ang_vel: 0.25
+    base_right_foot_height_difference: 1.0
+    dof_pos: 1.0
+    dof_vel: 0.05
+    pelvis_orientation_error: 1.0
+    pelvis_recovery_command: 1.0
+    projected_gravity: 1.0
+  history_length_dict:
+    actor_obs: 1
+task:
+  model_path: models/loco/g1_29dof/ppo_recovery1.onnx
+  motion_data_path: reference/ridding1.npz
+  rl_rate: 50.0
+  policy_action_scale: 0.25
+  slowdown_height_m: 0.03
+  max_acceleration_m_s2: 0.5
+  right_ankle_height_m: 0.035  # Calibrate for the actual right-foot support pose.
+  bridge_kp_scale: 0.35
+  bridge_kd_scale: 0.6
+# An optional InitialPoseGuard may restrict startup to the reference pose.
+# Omit it to allow recovery from a depressed pelvis pose.
+guard: null
