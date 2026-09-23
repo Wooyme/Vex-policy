@@ -16,6 +16,7 @@ from vex_policy.config.config_types import (
     MqttConfig,
     PelvisRecoveryTaskConfig,
     PolicySpec,
+    PoseHoldTaskConfig,
     RobotRuntimeConfig,
     RuntimeConfig,
     SonicTaskConfig,
@@ -90,6 +91,12 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
         path_fields = [] if spec.implementation in {"hold_position", "interpolation"} else ["model_path"]
         if spec.implementation == "hold_position" and not isinstance(spec.task, HoldPositionTaskConfig):
             raise ValueError(f"Policy {spec.name!r} requires HoldPositionTaskConfig")
+        if spec.implementation == "pose_hold":
+            if not isinstance(spec.task, PoseHoldTaskConfig):
+                raise ValueError(f"Policy {spec.name!r} requires PoseHoldTaskConfig")
+            if spec.inputs:
+                raise ValueError(f"Policy {spec.name!r} pose_hold requires empty inputs")
+            path_fields.append("motion_data_path")
         if spec.implementation == "interpolation":
             if not isinstance(spec.task, InterpolationTaskConfig):
                 raise ValueError(f"Policy {spec.name!r} requires InterpolationTaskConfig")

@@ -16,6 +16,24 @@ class DebugConfig:
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class PoseHoldTaskConfig:
+    """Holosoma pose-hold actor with a fixed, explicitly selected reference pose."""
+
+    model_path: str = Field(min_length=1)
+    motion_data_path: str = Field(min_length=1)
+    reference_pose_frame: int = Field(default=-1, strict=True)
+    action_mask_path: str | None = None
+    rl_rate: float = Field(default=50.0, gt=0.0, allow_inf_nan=False)
+    policy_action_scale: float = Field(default=0.25, gt=0.0, allow_inf_nan=False)
+    print_observations: bool = False
+    debug: DebugConfig = DebugConfig()
+
+    def __post_init__(self) -> None:
+        if not self.model_path.strip() or not self.motion_data_path.strip():
+            raise ValueError("Pose hold model_path and motion_data_path must not be empty")
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class HoldPositionTaskConfig:
     """Configuration for the model-free hold policy."""
 

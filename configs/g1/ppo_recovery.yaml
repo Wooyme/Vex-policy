@@ -38,7 +38,7 @@ observation:
   history_length_dict:
     actor_obs: 1
 task:
-  model_path: models/loco/g1_29dof/ppo_recovery1.onnx
+  model_path: models/loco/g1_29dof/ppo_recovery_v922.onnx
   motion_data_path: reference/ridding1.npz
   rl_rate: 50.0
   policy_action_scale: 0.25

@@ -45,6 +45,13 @@ def relative_rotation_vector(initial_wxyz: np.ndarray, current_wxyz: np.ndarray)
 
 def load_motion_last_pose(path: str | Path) -> InitialPose:
     """Load and validate the final root/joint pose from a Holosoma motion NPZ."""
+    return load_motion_pose(path, -1)
+
+
+def load_motion_pose(path: str | Path, frame_index: int = -1) -> InitialPose:
+    """Load a zero-based reference frame; negative indices count from the end."""
+    if isinstance(frame_index, (bool, np.bool_)) or not isinstance(frame_index, (int, np.integer)):
+        raise ValueError("Reference frame_index must be an integer")
     motion_path = Path(path)
     if not motion_path.is_file():
         raise ValueError(f"Locomotion motion file does not exist: {motion_path}")
@@ -53,7 +60,10 @@ def load_motion_last_pose(path: str | Path) -> InitialPose:
             missing = {"joint_names", "joint_pos"} - set(motion.files)
             if missing:
                 raise ValueError(f"Locomotion motion is missing arrays: {sorted(missing)}")
-            joint_names = tuple(str(name) for name in motion["joint_names"].tolist())
+            names = motion["joint_names"]
+            if names.ndim != 1 or names.dtype.kind not in {"U", "S"}:
+                raise ValueError("Locomotion motion joint_names must be a one-dimensional string array")
+            joint_names = tuple(names.astype(str).tolist())
             joint_pos = np.asarray(motion["joint_pos"], dtype=np.float64)
     except (OSError, ValueError) as error:
         if isinstance(error, ValueError) and str(error).startswith("Locomotion motion"):
@@ -65,7 +75,11 @@ def load_motion_last_pose(path: str | Path) -> InitialPose:
         raise ValueError(
             f"Locomotion joint_pos must have shape (frames, 7 + {len(joint_names)}), got {joint_pos.shape}"
         )
-    final_pose = joint_pos[-1]
+    if not -len(joint_pos) <= frame_index < len(joint_pos):
+        raise ValueError(f"Reference frame_index {frame_index} is out of range for {len(joint_pos)} frames")
+    final_pose = joint_pos[frame_index]
+    if not np.isfinite(final_pose).all():
+        raise ValueError(f"Reference frame {frame_index} contains non-finite values")
     root_quat_wxyz = final_pose[3:7]
     return InitialPose(
         dof_names=joint_names,

@@ -13,6 +13,7 @@ from .task import (
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
     PelvisRecoveryTaskConfig,
+    PoseHoldTaskConfig,
     SonicTaskConfig,
     TaskConfig,
     UfoTaskConfig,
@@ -32,6 +33,7 @@ class InferenceConfig:
         | SonicTaskConfig
         | WaistLocomotionTaskConfig
         | PelvisRecoveryTaskConfig
+        | PoseHoldTaskConfig
         | HoldPositionTaskConfig
         | InterpolationTaskConfig
         | UfoTaskConfig

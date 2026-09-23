@@ -1,0 +1,40 @@
+name: g1-pose-hold
+implementation: pose_hold
+type: full_body
+inputs: []
+observation:
+  obs_dict:
+    actor_obs:
+    - actions
+    - base_ang_vel
+    - base_right_foot_height_difference
+    - dof_pos
+    - dof_vel
+    - projected_gravity
+  obs_dims:
+    actions: 29
+    base_ang_vel: 3
+    base_right_foot_height_difference: 1
+    dof_pos: 29
+    dof_vel: 29
+    projected_gravity: 3
+  obs_scales:
+    actions: 1.0
+    base_ang_vel: 0.25
+    base_right_foot_height_difference: 1.0
+    dof_pos: 1.0
+    dof_vel: 0.05
+    projected_gravity: 1.0
+  history_length_dict:
+    actor_obs: 1
+task:
+  # Both paths are relative to the process working directory (the policy repo).
+  model_path: ../../holosoma/logs/g1-pose-hold/20260923_064503-g1_29dof_pose_hold-locomotion/exported/model_02200.onnx
+  # The local reference/doggy0.npz has different contents; use the training data.
+  motion_data_path: ../../holosoma/src/holosoma/holosoma/data/motions/g1_29dof/doggy0.npz
+  reference_pose_frame: 1  # Zero-based: the second frame, matching this model.
+  rl_rate: 50.0
+  policy_action_scale: 0.25
+guard:
+  startup_joint_tolerance_rad: 0.2
+  startup_gravity_tolerance: 0.2

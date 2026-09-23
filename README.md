@@ -373,6 +373,35 @@ inputs:
   parameter: {name: yaw, min: -1.0, max: 1.0, default: 0.0}
 ```
 
+## Holosoma Pose hold
+
+Holosoma `exp:g1_29dof_pose_hold` 使用独立的 `implementation: pose_hold` 神经网络策略：
+
+```bash
+vex-policy --config configs/examples/holosoma/g1_29dof_pose_hold.yaml
+```
+
+MQTT 策略名为 `g1-pose-hold`，没有手动参数，使用 `inputs: []`。示例不加入默认策略目录，
+模型与参考 NPZ 路径均相对进程当前工作目录解析。示例指向 Holosoma
+`20260923_064503-g1_29dof_pose_hold-locomotion/exported/model_02200.onnx` 及训练数据目录的
+`doggy0.npz`，`reference_pose_frame: 1` 表示第二帧。**本项目 `reference/doggy0.npz` 内容不同，
+不能替代该训练参考文件。** 更换模型时应同时核对训练参考文件与帧索引；索引从零开始，支持负索引，默认
+`-1` 为最后一帧。部署仅需本地模型和配套 NPZ，不需要安装 Holosoma。
+
+NPZ 使用 `joint_names` 和含根姿态 `[xyz,wxyz]` 的 `joint_pos`，按名称重排关节。
+参考帧同时作为关节观测和动作残差的零位；非法帧、关节限位和非有限数据在加载阶段报错。
+示例启用 `InitialPoseGuard`，检查关节与参考姿态的误差（默认 0.2 rad）及重力向量误差（默认 0.2），
+通过后以 50 Hz 直接推理。启动检查不限制世界 yaw，不包含内置插值阶段。
+
+模型接口必须为 `actor_obs[1,94] → action[1,29]`，并包含匹配的 `dof_names`、`action_scale`、
+`kp/kd` 和 `robot_urdf` 元数据。观测依次为上一拍原始动作、基座角速度、基座相对右脚踝高度、
+参考相对关节位置、关节速度、投影重力。高度差由关节正运动学与 IMU 计算，不使用 SDK 的占位世界位置。
+动作先裁剪至 ±100，再乘以 0.25 并叠加参考关节角，最后施加 G1 位置限位；下一拍动作观测保留
+未经裁剪的网络输出。Kp/Kd 使用机器人配置成对覆盖优先、模型元数据其次的公共规则。
+激活和停用清空动作历史；动作 mask、校准、limiter、estop 和心跳沿用公共机制。
+
+该策略独立于下文的模型无关 `hold_position`。离线验证覆盖模型接口和控制计算，闭环效果需另行验证。
+
 ## Hold position
 
 `hold_position` 是不加载 ONNX 网络的保持策略，完整示例见 `configs/examples/g1_hold_position.yaml`。每次
