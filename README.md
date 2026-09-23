@@ -373,6 +373,42 @@ inputs:
   parameter: {name: yaw, min: -1.0, max: 1.0, default: 0.0}
 ```
 
+## Holosoma Reference locomotion
+
+Holosoma `g1_29dof_kneeling` 和更新后的 `g1_29dof_crawling` 共用
+`implementation: reference_locomotion`，示例分别为
+`configs/examples/holosoma/g1_29dof_kneeling.yaml` 和
+`configs/examples/holosoma/g1_29dof_crawling.yaml`。两份示例均为 **待填写配套文件的模板**，
+不随默认策略目录加载；先替换 `REPLACE_ME` 模型和参考 NPZ 路径，再单独启动，例如：
+
+```bash
+vex-policy --config configs/examples/holosoma/g1_29dof_crawling.yaml
+```
+
+模型必须为 `actor_obs[1,100] → action[1,29]`，包含硬件顺序的 `dof_names`、29 维
+`action_scale`、`kp/kd` 元数据。角速度和投影重力均使用机身坐标系，不需要 `robot_urdf` 或世界位置。
+模型附带 `experiment_config` 时会核对 actor 的观测函数、缩放、裁剪和历史长度，拒绝旧版
+`crawling:base_ang_vel` 朝向坐标系模型。缺少训练配置的模型须自行核对其观测语义。
+训练配置的修改不会改变已导出的模型，也不能通过修改旧模型元数据完成适配；需使用按新观测训练的模型。
+Crawling 的 critic 使用不同坐标系不影响 actor 部署。
+
+`motion_data_path` 与 `model_path` 均相对进程当前工作目录解析。参考 NPZ 包含 `joint_names` 和
+带根姿态 `[xyz,wxyz]` 的 `joint_pos`，`reference_pose_frame` 为训练使用的零基帧索引，支持负数，
+默认 `-1` 为最后一帧。关节按名称重排，所选参考角同时用于关节位置观测和动作残差零位。
+示例启用 `InitialPoseGuard`（关节容差 0.2 rad、重力误差容差 0.2），不会自动插值到参考姿态。
+
+面板使用 `vx`（横向）、`vy`（纵向）、`yaw`，映射到训练命令 `[vy,-vx,-yaw]`；示例范围为
+`vx±0.15`、`vy±0.3` m/s 和 `yaw±0.5` rad/s，默认均为零。默认控制频率 50 Hz，步态周期 1 秒，
+移动首拍相位为 `[0,-π]`。线速度模长与角速度绝对值均小于 0.01 时，相位观测为 `[π,π]`；
+内部回合时间仍推进，恢复运动不重置相位。部署不采样训练中的随机步态频率。
+
+观测按名称排序为上一拍原始动作、机身角速度、角速度命令、线速度命令、相位余弦、参考相对关节位置、
+关节速度、投影重力和相位正弦，历史长度为 1。角速度缩放为 0.25、关节速度为 0.05，其余为 1。
+目标角使用裁剪至 ±100 的动作，经过 mask、默认 0.25 缩放和参考角叠加后施加关节限位；
+下一拍动作观测保留裁剪及 mask 前的原始输出。增益遵循 robot config 成对覆盖优先、模型元数据其次。
+激活和停用重置动作、观测、命令及相位，启动时恢复输入默认值；无效状态或推理输出触发现有故障锁存。
+离线测试验证接口和控制计算，实际运动效果仍需对应新版模型的闭环验证。
+
 ## Holosoma Pose hold
 
 Holosoma `exp:g1_29dof_pose_hold` 使用独立的 `implementation: pose_hold` 神经网络策略：

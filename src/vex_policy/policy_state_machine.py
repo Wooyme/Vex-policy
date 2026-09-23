@@ -20,6 +20,7 @@ from vex_policy.policies.interpolation import InterpolationPolicy
 from vex_policy.policies.locomotion import LocomotionPolicy
 from vex_policy.policies.pelvis_recovery import PelvisRecoveryPolicy
 from vex_policy.policies.pose_hold import PoseHoldPolicy
+from vex_policy.policies.reference_locomotion import ReferenceLocomotionPolicy
 from vex_policy.policies.sonic import SonicPolicy
 from vex_policy.policies.ufo import UfoPolicy
 from vex_policy.policies.waist_locomotion import WaistLocomotionPolicy
@@ -37,6 +38,8 @@ def _policy_class(kind: str) -> type[BasePolicy]:
         return LocomotionPolicy
     if kind == "pose_hold":
         return PoseHoldPolicy
+    if kind == "reference_locomotion":
+        return ReferenceLocomotionPolicy
     if kind == "hold_position":
         return HoldPositionPolicy
     if kind == "interpolation":

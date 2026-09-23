@@ -54,6 +54,7 @@ unitree_mp = "vex_policy.sdk.unitree.unitree_interface_mp:UnitreeInterfaceMP"
 [project.entry-points."vex_policy.policies"]
 hold_position = "vex_policy.policies.hold_position:HoldPositionPolicy"
 pose_hold = "vex_policy.policies.pose_hold:PoseHoldPolicy"
+reference_locomotion = "vex_policy.policies.reference_locomotion:ReferenceLocomotionPolicy"
 interpolation = "vex_policy.policies.interpolation:InterpolationPolicy"
 locomotion = "vex_policy.policies.locomotion:LocomotionPolicy"
 wbt = "vex_policy.policies.wbt:WholeBodyTrackingPolicy"

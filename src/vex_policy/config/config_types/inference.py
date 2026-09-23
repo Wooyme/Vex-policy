@@ -14,6 +14,7 @@ from .task import (
     InterpolationTaskConfig,
     PelvisRecoveryTaskConfig,
     PoseHoldTaskConfig,
+    ReferenceLocomotionTaskConfig,
     SonicTaskConfig,
     TaskConfig,
     UfoTaskConfig,
@@ -34,6 +35,7 @@ class InferenceConfig:
         | WaistLocomotionTaskConfig
         | PelvisRecoveryTaskConfig
         | PoseHoldTaskConfig
+        | ReferenceLocomotionTaskConfig
         | HoldPositionTaskConfig
         | InterpolationTaskConfig
         | UfoTaskConfig
