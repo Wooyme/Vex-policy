@@ -13,16 +13,11 @@ from vex_policy.policies.guard.initial_pose import InitialPoseGuard
 from vex_policy.policies.utils.inference import OnnxActor, resolve_control_gains
 from vex_policy.policies.utils.initial_pose import normalize_quaternion_wxyz
 from vex_policy.policies.utils.joint_command import PositionAction, position_command
-from vex_policy.policies.utils.locomotion_utils import (
-    RightAnkleKinematics,
-    load_motion_last_pose,
-    relative_rotation_vector,
-)
+from vex_policy.policies.utils.locomotion_utils import RightAnkleKinematics, load_motion_last_pose
 from vex_policy.policies.utils.observations import ObservationHistory, robot_observation_terms
 from vex_policy.robots import G1_JOINT_LOWER, G1_JOINT_UPPER
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.latency import LatencyStage
-from vex_policy.utils.math.quat import quat_mul, quat_to_rpy, rpy_to_quat
 
 from .base import BasePolicy, PolicyRuntimeFault
 
@@ -36,8 +31,7 @@ class PelvisRecoveryPolicy(BasePolicy):
         "base_right_foot_height_difference": 1,
         "dof_pos": 29,
         "dof_vel": 29,
-        "pelvis_orientation_error": 3,
-        "pelvis_recovery_command": 2,
+        "pelvis_recovery_command": 4,
         "projected_gravity": 3,
     }
     _OBS_SCALES: ClassVar[dict[str, float]] = {
@@ -46,7 +40,6 @@ class PelvisRecoveryPolicy(BasePolicy):
         "base_right_foot_height_difference": 1.0,
         "dof_pos": 1.0,
         "dof_vel": 0.05,
-        "pelvis_orientation_error": 1.0,
         "pelvis_recovery_command": 1.0,
         "projected_gravity": 1.0,
     }
@@ -68,12 +61,18 @@ class PelvisRecoveryPolicy(BasePolicy):
         self.input_parameters = {parameter.name: parameter for parameter in input_parameters(config.inputs)}
         if (
             not all(isinstance(component, SliderInput) for component in config.inputs)
-            or len(config.inputs) != 2
-            or set(self.input_parameters) != {"target_height", "peak_speed"}
+            or len(config.inputs) != 4
+            or set(self.input_parameters) != {"target_height", "peak_speed", "max_descent_speed", "thigh_opening_angle"}
         ):
-            raise ValueError("Pelvis recovery requires target_height and peak_speed sliders")
-        if any(parameter.min <= 0.0 for parameter in self.input_parameters.values()):
-            raise ValueError("Pelvis recovery input ranges must be positive")
+            raise ValueError(
+                "Pelvis recovery requires target_height, peak_speed, max_descent_speed and thigh_opening_angle sliders"
+            )
+        if any(self.input_parameters[name].min <= 0.0 for name in ("target_height", "peak_speed")):
+            raise ValueError("Pelvis recovery height and ascent speed ranges must be positive")
+        if any(self.input_parameters[name].min < 0.0 for name in ("max_descent_speed", "thigh_opening_angle")):
+            raise ValueError("Pelvis recovery descent speed and thigh angle ranges must be nonnegative")
+        if self.input_parameters["thigh_opening_angle"].max > np.pi:
+            raise ValueError("Pelvis recovery thigh_opening_angle must be in radians and at most pi")
 
         self.initial_pose = load_motion_last_pose(self.task.motion_data_path)
         if set(self.initial_pose.dof_names) != set(self.dof_names):
@@ -116,7 +115,7 @@ class PelvisRecoveryPolicy(BasePolicy):
     def _validate_observations(self) -> None:
         observations = self.observations
         if observations.obs_terms_sorted != {"actor_obs": sorted(self._OBS_DIMS)}:
-            raise ValueError("Pelvis recovery requires exactly the eight actor_obs terms")
+            raise ValueError("Pelvis recovery requires exactly the seven actor_obs terms")
         if observations.history_length_dict.get("actor_obs", 1) != 1:
             raise ValueError("Pelvis recovery actor_obs history length must be 1")
         for term, dimension in self._OBS_DIMS.items():
@@ -135,8 +134,8 @@ class PelvisRecoveryPolicy(BasePolicy):
 
     def _validate_model(self) -> None:
         inputs, outputs = self.actor.session.get_inputs(), self.actor.session.get_outputs()
-        if len(inputs) != 1 or inputs[0].name != "actor_obs" or list(inputs[0].shape) != [1, 99]:
-            raise ValueError("Pelvis recovery ONNX must expose actor_obs[1, 99]")
+        if len(inputs) != 1 or inputs[0].name != "actor_obs" or list(inputs[0].shape) != [1, 98]:
+            raise ValueError("Pelvis recovery ONNX must expose actor_obs[1, 98]")
         if len(outputs) != 1 or outputs[0].name != "action" or list(outputs[0].shape) != [1, 29]:
             raise ValueError("Pelvis recovery ONNX must expose action[1, 29]")
         metadata = self.actor.metadata
@@ -156,8 +155,18 @@ class PelvisRecoveryPolicy(BasePolicy):
         self.observations.reset()
         # Training feeds back raw actor outputs, before clipping/scaling targets.
         self.last_action = np.zeros((1, 29), dtype=np.float32)
-        self.pelvis_orientation_reference_quat = None
-        self.recovery_command = np.array([[0.0, self.input_parameters["target_height"].default]])
+        # Training order: ascent velocity, world height, loaded descent limit,
+        # angle between the left/right hip-to-knee directions (radians).
+        self.recovery_command = np.array(
+            [
+                [
+                    0.0,
+                    self.input_parameters["target_height"].default,
+                    self.input_parameters["max_descent_speed"].default,
+                    self.input_parameters["thigh_opening_angle"].default,
+                ]
+            ]
+        )
         self.peak_speed = self.input_parameters["peak_speed"].default
         self._elapsed_steps = 0
 
@@ -178,11 +187,8 @@ class PelvisRecoveryPolicy(BasePolicy):
         return replace(state, base_quat=quaternion[None, :])
 
     def _on_activate(self, robot_state_data: LowState) -> None:
-        state = self._validated_state(robot_state_data)
+        self._validated_state(robot_state_data)
         self._reset_episode()
-        reference = np.asarray(self.initial_pose.root_quat_wxyz)
-        yaw_delta = quat_to_rpy(state.base_quat[0])[2] - quat_to_rpy(reference)[2]
-        self.pelvis_orientation_reference_quat = quat_mul(rpy_to_quat((0.0, 0.0, yaw_delta))[None], reference[None])
 
     def _on_deactivate(self) -> None:
         self._reset_episode()
@@ -195,6 +201,8 @@ class PelvisRecoveryPolicy(BasePolicy):
                 raise PolicyRuntimeFault(f"Pelvis recovery input {name!r} is outside its configured range")
             values[name] = value
         self.recovery_command[0, 1] = values["target_height"]
+        self.recovery_command[0, 2] = values["max_descent_speed"]
+        self.recovery_command[0, 3] = values["thigh_opening_angle"]
         self.peak_speed = values["peak_speed"]
 
     def _prepare_observations(self, state: LowState) -> dict[str, np.ndarray]:
@@ -212,13 +220,12 @@ class PelvisRecoveryPolicy(BasePolicy):
             self.recovery_command[0, 0] += np.clip(desired - self.recovery_command[0, 0], -allowance, allowance)
         terms["actions"] = self.last_action
         terms["base_right_foot_height_difference"] = height_difference
-        terms["pelvis_orientation_error"] = relative_rotation_vector(
-            self.pelvis_orientation_reference_quat, state.base_quat
-        )
         terms["pelvis_recovery_command"] = self.recovery_command
         observations = self.observations.prepare(terms)
         if not np.isfinite(observations["actor_obs"]).all():
             raise PolicyRuntimeFault("Nonfinite pelvis recovery observations")
+        # Holosoma clips the assembled, scaled observations before inference.
+        np.clip(observations["actor_obs"], -100.0, 100.0, out=observations["actor_obs"])
         return observations
 
     def _compute_command(self, robot_state_data: LowState):

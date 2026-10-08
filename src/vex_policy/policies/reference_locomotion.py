@@ -17,7 +17,6 @@ from vex_policy.policies.utils.observations import ObservationHistory, robot_obs
 from vex_policy.robots import G1_29DOF, G1_JOINT_LOWER, G1_JOINT_UPPER
 from vex_policy.sdk.base.base_interface import LowState
 from vex_policy.utils.latency import LatencyStage
-
 from .base import BasePolicy, PolicyRuntimeFault
 
 
@@ -116,38 +115,14 @@ class ReferenceLocomotionPolicy(BasePolicy):
             raise ValueError("Reference locomotion ONNX dof_names do not match the robot joint order")
         scale = np.asarray(metadata.get("action_scale", ()), dtype=np.float64)
         if (
-            scale.shape != (29,)
-            or not np.isfinite(scale).all()
-            or not np.allclose(scale, self.task.policy_action_scale)
+                scale.shape != (29,)
+                or not np.isfinite(scale).all()
+                or not np.allclose(scale, self.task.policy_action_scale)
         ):
             raise ValueError(
                 "Reference locomotion ONNX action_scale must match task.policy_action_scale for all 29 joints"
             )
         self._validate_gains(metadata.get("kp", ()), metadata.get("kd", ()))
-        if "experiment_config" in metadata:
-            self._validate_training_observations(metadata["experiment_config"])
-
-    def _validate_training_observations(self, experiment) -> None:
-        """Reject equal-sized actors trained with different observation semantics."""
-        try:
-            group = experiment["observation"]["groups"]["actor_obs"]
-            terms = group["terms"]
-            if set(terms) != set(self._OBS_DIMS) or group.get("history_length", 1) != 1:
-                raise ValueError("Reference locomotion ONNX training observations must match the nine-term contract")
-            if group.get("concatenate", True) is not True:
-                raise ValueError("Reference locomotion ONNX training actor_obs must be concatenated")
-            for name, scale in self._OBS_SCALES.items():
-                term = terms[name]
-                expected = f"holosoma.managers.observation.terms.locomotion:{name}"
-                if term["func"] != expected:
-                    raise ValueError(
-                        f"Reference locomotion ONNX training term {name!r} must use {expected}; "
-                        f"got {term['func']!r}. Legacy crawling heading-frame actors are not supported."
-                    )
-                if not np.isclose(term.get("scale", 1.0), scale) or term.get("clip") is not None:
-                    raise ValueError(f"Reference locomotion ONNX training scale/clip mismatch for {name!r}")
-        except (KeyError, TypeError, AttributeError) as error:
-            raise ValueError("Invalid reference locomotion ONNX experiment_config observations") from error
 
     def _reset_episode(self) -> None:
         self.actions.reset()
@@ -159,10 +134,10 @@ class ReferenceLocomotionPolicy(BasePolicy):
 
     def _validated_state(self, state: LowState) -> LowState:
         for name, shape in (
-            ("joint_pos", (1, 29)),
-            ("joint_vel", (1, 29)),
-            ("base_ang_vel", (1, 3)),
-            ("base_quat", (1, 4)),
+                ("joint_pos", (1, 29)),
+                ("joint_vel", (1, 29)),
+                ("base_ang_vel", (1, 3)),
+                ("base_quat", (1, 4)),
         ):
             values = np.asarray(getattr(state, name))
             if values.shape != shape or not np.isfinite(values).all():

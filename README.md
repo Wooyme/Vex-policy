@@ -321,17 +321,23 @@ vex-policy --config configs/g1/ppo_recovery.yaml
 ```
 
 该配置也随默认的 `configs/g1` 目录一起加载，MQTT 策略名为 `g1-pelvis-recovery`。
-模型为 `models/loco/g1_29dof/ppo_recovery.onnx`，参考姿态为 `reference/ridding1.npz` 的最后一帧；
-两个路径均相对进程当前工作目录解析。模型必须提供 `actor_obs[1,99] → action[1,29]`，并包含匹配的
+模型为 `models/loco/g1_29dof/ppo_recovery_v924.onnx`，参考姿态为 `reference/ridding1.npz` 的最后一帧；
+两个路径均相对进程当前工作目录解析。模型必须提供 `actor_obs[1,98] → action[1,29]`，并包含匹配的
 `dof_names`、`action_scale`、基础 `kp/kd` 和 `robot_urdf` 元数据。部署不需要安装 Holosoma。
 
-两个滑块分别为 `target_height`（骨盆目标离地高度，0.15–0.25 m，默认 0.20 m）和
-`peak_speed`（峰值上升速度，0.05–0.30 m/s，默认 0.175 m/s）。在下文 MQTT 消息的 `control` 中使用：
+四个滑块分别为 `target_height`（骨盆目标离地高度，0.15–0.25 m，默认 0.15 m）、
+`peak_speed`（峰值上升速度，0.05–0.30 m/s，默认 0.10 m/s）、
+`max_descent_speed`（负载下允许的下降速度幅值，0.05–0.15 m/s，默认 0.10 m/s）和
+`thigh_opening_angle`（左右髋到膝方向之间的目标夹角，**弧度**，π/6–π/3，默认 π/4，即 45°）。
+在 MQTT 消息的 `inputs` 中使用：
 
 ```json
 {
   "policy": ["g1-pelvis-recovery"],
-  "inputs": {"g1-pelvis-recovery": {"target_height": 0.20, "peak_speed": 0.175}},
+  "inputs": {"g1-pelvis-recovery": {
+    "target_height": 0.15, "peak_speed": 0.10,
+    "max_descent_speed": 0.10, "thigh_opening_angle": 0.7853981633974483
+  }},
   "estop": false
 }
 ```
@@ -340,6 +346,8 @@ vex-policy --config configs/g1/ppo_recovery.yaml
 `peak_speed * tanh(max(target_height - estimated_height, 0) / slowdown_height_m)` 计算期望速度，
 每拍变化不超过 `max_acceleration_m_s2 / rl_rate`。默认减速距离为 0.03 m、加速度上限为 0.5 m/s²；
 运行中改变滑块不会清零速度。达到或超过目标高度时平滑降到零，不产生向下速度指令。
+四维网络命令按 `[上升速度, 目标高度, 下降速度上限, 大腿张角]` 排列；后两项直接输入网络，
+不参与上升速度公式，也不代表部署端额外施加下降限速或关节角限位。
 
 高度估算复用 ONNX URDF 的右脚踝正运动学和 IMU 重力方向：骨盆离地高度等于骨盆与右脚踝的高度差，
 再加 `task.right_ankle_height_m`。该参数默认 0.035 m，假设右脚持续支撑；应在实际支撑姿态下测量
@@ -348,8 +356,9 @@ vex-policy --config configs/g1/ppo_recovery.yaml
 `base_pos`。参考 NPZ 的 root XYZ 不参与高度估算。
 
 关节观测与目标动作均以参考 NPZ 最后一帧的关节角为零点，按名称重排并裁剪到硬限位。
-朝向参考保留该帧的倾斜角，只在每次启动时对齐实测 yaw；启动时的倾斜偏差因此会进入网络观测。
+新版观测移除了 `pelvis_orientation_error`，保留 IMU 投影重力与角速度，不再维护启动朝向参考。
 动作观测反馈未经裁剪的上一拍网络输出，目标角则使用裁剪后的动作乘以 0.25，再叠加参考角并施加关节限位。
+拼接、缩放后的整体观测按训练端规则裁剪到 `[-100, 100]`。旧版 99 维模型和双滑块配置会在加载时拒绝。
 腰 pitch、左右髋 pitch、左右膝的基础 Kp/Kd 分别乘以 `bridge_kp_scale=0.35` 和 `bridge_kd_scale=0.6`，
 降低增益不会增大动作偏移。基础增益沿用 robot config 成对覆盖优先、ONNX 元数据次之的规则。
 

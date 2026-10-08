@@ -1,0 +1,54 @@
+name: g1-kneeling
+implementation: reference_locomotion
+type: full_body
+inputs:
+- type: joystick
+  x: {name: vx, min: -0.15, max: 0.15, default: 0.0}
+  y: {name: vy, min: -0.3, max: 0.3, default: 0.0}
+- type: slider
+  parameter: {name: yaw, min: -0.5, max: 0.5, default: 0.0}
+observation:
+  obs_dict:
+    actor_obs:
+    - actions
+    - base_ang_vel
+    - command_ang_vel
+    - command_lin_vel
+    - cos_phase
+    - dof_pos
+    - dof_vel
+    - projected_gravity
+    - sin_phase
+  obs_dims:
+    actions: 29
+    base_ang_vel: 3
+    command_ang_vel: 1
+    command_lin_vel: 2
+    cos_phase: 2
+    dof_pos: 29
+    dof_vel: 29
+    projected_gravity: 3
+    sin_phase: 2
+  obs_scales:
+    actions: 1.0
+    base_ang_vel: 0.25
+    command_ang_vel: 1.0
+    command_lin_vel: 1.0
+    cos_phase: 1.0
+    dof_pos: 1.0
+    dof_vel: 0.05
+    projected_gravity: 1.0
+    sin_phase: 1.0
+  history_length_dict:
+    actor_obs: 1
+task:
+  # TEMPLATE: replace both paths with this model's training assets before use.
+  # Paths are relative to the process working directory, not this YAML.
+  # The actor must use locomotion:base_ang_vel (body frame).
+  # Old crawling:base_ang_vel (heading frame) models are incompatible.
+  model_path: models/loco/g1_29dof/ppo_kneeling.onnx
+  motion_data_path: reference/kneeling.npz
+  reference_pose_frame: -1  # Set to the exact training frame; zero-based, negatives allowed.
+  rl_rate: 50.0
+  gait_period: 1.0
+  policy_action_scale: 0.25
