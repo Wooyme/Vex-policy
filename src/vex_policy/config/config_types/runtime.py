@@ -12,6 +12,7 @@ from .observation import ObservationConfig
 from .robot import RobotConfig
 from .safety import EmergencyStopConfig, LimiterConfig
 from .task import (
+    BfmPoseTransitionTaskConfig,
     BfmTaskConfig,
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
@@ -76,6 +77,7 @@ class PolicySpec(StrictModel):
     task: (
         TaskConfig
         | BfmTaskConfig
+        | BfmPoseTransitionTaskConfig
         | WbtTaskConfig
         | SonicTaskConfig
         | WaistLocomotionTaskConfig
@@ -98,6 +100,7 @@ class PolicySpec(StrictModel):
         task_types = {
             "bfm_walk": BfmTaskConfig,
             "bfm_kneeling": BfmTaskConfig,
+            "bfm_pose_transition": BfmPoseTransitionTaskConfig,
             "hold_position": HoldPositionTaskConfig,
             "interpolation": InterpolationTaskConfig,
             "sonic": SonicTaskConfig,

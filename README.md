@@ -423,6 +423,31 @@ kneeling 的 `motion_data_path`、`reference_pose_frame` 选择训练参考跪�
 仅用于启动姿态检查；BFM 观测与残差目标始终使用冻结模型的站立 motor zeros。
 默认从对应姿态启动，不执行站立到跪姿的自动过渡。两种策略均需全身控制。
 
+## Holosoma BFM pose transition
+
+`configs/g1/bfm_pose_transition.yaml` 部署 Holosoma `g1_29dof_bfm_pose_transition`：
+从 `source_pose` 到 `target_pose` 的一次定时过渡。策略激活时机器人应已处于源姿态；
+前 `settle_s` 秒执行源姿态 latent，随后在 `transition_duration_s`（训练范围 4–8 s）内
+按 controller 输出的残差 waypoint 过渡，之后保持目标 latent，controller 不再运行。
+controller 接口为 `actor_obs[1,896] → action[1,256]`（frame 93 + goal_latents 512 +
+target 33 + timing 2 + latent 256），底层 actor 与 walk 相同。无 MQTT 输入。
+
+每个姿态的 goal latent 与 33 维目标特征（端点关节相对 motor zeros、重力投影、根高度）
+都是常量，由独立脚本离线计算（仅依赖 numpy），运行时只加载结果：
+
+```bash
+python scripts/bfm_pose_bank.py \
+  --goal-bank ~/robot/holosoma/src/holosoma/holosoma/data/bfm_goal_bank.npz \
+  --endpoint-reference ~/robot/holosoma/src/holosoma/holosoma/data/bfm_endpoint_reference.npz \
+  --output models/bfm/pose_bank.npz
+```
+
+`source_pose`/`target_pose` 取 bank 中的 `pose_names`。bank 必须与训练该 controller 时
+使用的 goal bank 一致。
+`--endpoint-reference` 应使用训练命令中传入的那份（如 `run_bfm_waypoints.py` 的
+`--endpoint-reference`），而不是仓库默认文件。`controller_decimation` 必须等于导出元数据中的
+`experiment_config.control_decimation`（preset 为 4，d16 实验为 16）。
+
 ## Holosoma Reference locomotion
 
 Holosoma `g1_29dof_kneeling` 和更新后的 `g1_29dof_crawling` 共用

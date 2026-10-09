@@ -1,4 +1,4 @@
-"""Holosoma BFM walk/kneeling controllers with an independently clocked frozen actor."""
+"""Holosoma BFM controllers (walk, kneeling, pose transition) driving an independently clocked frozen actor."""
 
 from __future__ import annotations
 
@@ -7,9 +7,13 @@ from typing import ClassVar
 
 import numpy as np
 
-from vex_policy.config.config_types import BfmTaskConfig, GuardConfig, InferenceConfig, input_parameters
+from vex_policy.config.config_types import (
+    BfmPoseTransitionTaskConfig,
+    BfmTaskConfig,
+    InferenceConfig,
+    input_parameters,
+)
 from vex_policy.policies.base import BasePolicy, PolicyRuntimeFault
-from vex_policy.policies.guard.initial_pose import InitialPoseGuard
 from vex_policy.policies.utils.bfm import (
     ACTOR_CONTRACT_VERSION,
     ACTOR_HISTORY_LENGTH,
@@ -20,11 +24,12 @@ from vex_policy.policies.utils.bfm import (
     LATENT_DIM,
     pack_actor_observation,
     project_latent,
+    residual_waypoint,
+    slerp,
 )
 from vex_policy.policies.utils.inference import load_metadata, resolve_control_gains, shared_session
-from vex_policy.policies.utils.initial_pose import InitialPose, normalize_quaternion_wxyz
+from vex_policy.policies.utils.initial_pose import normalize_quaternion_wxyz
 from vex_policy.policies.utils.joint_command import position_command
-from vex_policy.policies.utils.locomotion_utils import load_motion_pose
 from vex_policy.policies.utils.observations import robot_observation_terms
 from vex_policy.policies.utils.sonic_planner import ort_providers
 from vex_policy.robots import G1_JOINT_LOWER, G1_JOINT_UPPER
@@ -59,14 +64,21 @@ def _joint_vector(value, label: str, *, nonnegative: bool = False) -> np.ndarray
     return values
 
 
-class BfmWalkPolicy(BasePolicy):
-    """Run a 356→256 controller every four cycles and a 465+256→29 actor every cycle."""
+class BfmPolicy(BasePolicy):
+    """Run a latent controller every four cycles and the frozen 465+256→29 actor every cycle.
 
-    kneeling: ClassVar[bool] = False
+    Subclasses declare their ``command_obs`` terms and inputs, and build those command terms;
+    the frame/latent groups, model contract checks and actor runtime are shared.
+    """
+
+    task_type: ClassVar[type]
+    # command_obs term -> (dimension, Holosoma observation function relative to managers.observation.terms).
+    command_obs: ClassVar[dict[str, tuple[int, str]]]
+    input_names: ClassVar[frozenset[str]] = frozenset()
 
     def __init__(self, config: InferenceConfig):
-        if not isinstance(config.task, BfmTaskConfig):
-            raise TypeError("BFM requires BfmTaskConfig")
+        if not isinstance(config.task, self.task_type):
+            raise TypeError(f"{type(self).__name__} requires {self.task_type.__name__}")
         super().__init__(config)
         if tuple(self.dof_names) != JOINT_NAMES or self.num_dofs != 29:
             raise ValueError("BFM requires the supported G1 29-DOF hardware joint order")
@@ -74,18 +86,14 @@ class BfmWalkPolicy(BasePolicy):
             raise ValueError("BFM requires full-body control without action masks")
         self.task = config.task
         self._input_parameters = {p.name: p for p in input_parameters(config.inputs)}
-        expected_inputs = {"vx", "vy", "yaw"} | ({"height"} if self.kneeling else set())
-        if self._input_parameters.keys() != expected_inputs:
-            raise ValueError(f"BFM inputs must be exactly {sorted(expected_inputs)}")
-        if self.kneeling and self._input_parameters["height"].min <= 0:
-            raise ValueError("BFM kneeling height must remain positive")
+        if self._input_parameters.keys() != self.input_names:
+            raise ValueError(f"{type(self).__name__} inputs must be exactly {sorted(self.input_names)}")
         self._groups = {
             "actor_obs": {"frame": FRAME_DIM},
-            "command_obs": {"command": 3, "cos_phase": 2, "sin_phase": 2},
+            "command_obs": {term: dimension for term, (dimension, _) in self.command_obs.items()},
             "latent_history_obs": {"latent": LATENT_DIM},
         }
-        if self.kneeling:
-            self._groups["command_obs"]["height_command"] = 1
+        self._setup_task()
         self._validate_observations()
         providers = ort_providers(self.task.inference_provider)
         self.controller = shared_session(
@@ -102,32 +110,14 @@ class BfmWalkPolicy(BasePolicy):
         self.robot_config = resolve_control_gains(config.robot, metadata.get("kp"), metadata.get("kd"))
         for name in ("motor_kp", "motor_kd"):
             _joint_vector(getattr(self.robot_config, name), name, nonnegative=True)
-        # if self.kneeling:
-        #     if not self.task.motion_data_path:
-        #         raise ValueError("BFM kneeling requires motion_data_path for its startup pose")
-        #     self.initial_pose = load_motion_pose(self.task.motion_data_path, self.task.reference_pose_frame)
-        # else:
-        #     if self.task.motion_data_path is not None:
-        #         raise ValueError("BFM walk uses the checkpoint's standing pose")
-        #     self.initial_pose = InitialPose(
-        #         dof_names=JOINT_NAMES,
-        #         dof_pos=tuple(self.default_dof_angles),
-        #         root_quat_wxyz=(1.0, 0.0, 0.0, 0.0),
-        #     )
-        # positions = dict(zip(self.initial_pose.dof_names, self.initial_pose.dof_pos, strict=True))
-        # if positions.keys() != set(JOINT_NAMES):
-        #     raise ValueError("BFM startup joint names must match G1")
-        # startup_q = np.asarray([positions[name] for name in JOINT_NAMES])
-        # if np.any(startup_q < G1_JOINT_LOWER) or np.any(startup_q > G1_JOINT_UPPER):
-        #     raise ValueError("BFM startup pose contains out-of-limit joints")
-        # self.guard = InitialPoseGuard(
-        #     config.guard or GuardConfig(),
-        #     self.initial_pose,
-        #     self.dof_names,
-        #     self.logger,
-        #     reason_prefix="bfm_start_check_failed",
-        # )
         self._reset_episode()
+
+    def _setup_task(self) -> None:
+        """Validate task-specific configuration before the models are loaded."""
+
+    def _command_observation(self) -> dict[str, np.ndarray]:
+        """Return the current command_obs terms."""
+        raise NotImplementedError
 
     def _validate_observations(self) -> None:
         """Keep controller groups separate; alphabetical term sorting is internal to each group."""
@@ -145,7 +135,8 @@ class BfmWalkPolicy(BasePolicy):
 
     def _validate_models(self, metadata: dict, actor_metadata: dict) -> None:
         """Reject legacy latent controllers and actor exports with a different normalization/action convention."""
-        _validate_interface(self.controller, {"actor_obs": 357 if self.kneeling else 356}, LATENT_DIM, "controller")
+        controller_dim = sum(sum(terms.values()) for terms in self._groups.values())
+        _validate_interface(self.controller, {"actor_obs": controller_dim}, LATENT_DIM, "controller")
         _validate_interface(self.actor, {"actor_obs": ACTOR_OBS_DIM, "latent": LATENT_DIM}, 29, "actor")
         for label, model_metadata in (("controller", metadata), ("actor", actor_metadata)):
             if tuple(model_metadata.get("dof_names", ())) != JOINT_NAMES:
@@ -176,11 +167,8 @@ class BfmWalkPolicy(BasePolicy):
             training_groups = experiment["observation"]["groups"]
             functions = {
                 "frame": "bfm:proprioceptive_frame",
-                "command": "bfm:velocity_command",
                 "latent": "bfm:executed_latent",
-                "cos_phase": "locomotion:cos_phase",
-                "sin_phase": "locomotion:sin_phase",
-                "height_command": "base_height:base_height_command",
+                **{term: function for term, (_, function) in self.command_obs.items()},
             }
             for name, terms in self._groups.items():
                 group = training_groups[name]
@@ -244,31 +232,22 @@ class BfmWalkPolicy(BasePolicy):
                 raise PolicyRuntimeFault(f"Invalid BFM input: {name}")
         self._control = dict(control)
 
-    def _phase(self) -> np.ndarray:
-        """Standing changes phase observations; the episode clock keeps advancing at controller cadence."""
-        velocity = np.asarray([self._control["vy"], -self._control["vx"]])
-        if np.linalg.norm(velocity) < 0.01 and abs(self._control["yaw"]) < 0.01:
-            return np.full((1, 2), np.pi)
-        controller_step = self._episode_step // self.task.controller_decimation
-        phase = controller_step * self.task.controller_decimation / self.rl_rate * (
-            2 * np.pi / self.task.gait_period
-        ) + np.array([[0.0, -np.pi]])
-        return np.fmod(phase + np.pi, 2 * np.pi) - np.pi
-
     def _controller_observation(self, frame: np.ndarray) -> np.ndarray:
-        phase = self._phase()
-        terms = {
-            "frame": frame,
-            "latent": self.latent,
-            "command": np.asarray([[self._control["vy"], -self._control["vx"], -self._control["yaw"]]]),
-            "cos_phase": np.cos(phase),
-            "sin_phase": np.sin(phase),
-        }
-        if self.kneeling:
-            terms["height_command"] = np.asarray([[self._control["height"]]])
+        terms = {"frame": frame, "latent": self.latent, **self._command_observation()}
         return np.concatenate(
             [terms[term] for group in self._groups.values() for term in sorted(group)], axis=1
         ).astype(np.float32)
+
+    def _run_controller(self, frame: np.ndarray) -> np.ndarray:
+        controller_obs = self._controller_observation(frame)
+        if self.task.print_observations:
+            print("BFM controller actor_obs:", controller_obs)
+        return self._infer(self.controller, {"actor_obs": controller_obs}, LATENT_DIM, "controller")
+
+    def _update_latent(self, frame: np.ndarray) -> None:
+        """Refresh the executed latent at controller cadence."""
+        if self._episode_step % self.task.controller_decimation == 0:
+            self.latent = project_latent(self._run_controller(frame))
 
     @staticmethod
     def _infer(session, feed: dict[str, np.ndarray], dimension: int, label: str) -> np.ndarray:
@@ -301,12 +280,7 @@ class BfmWalkPolicy(BasePolicy):
             self.actor_history[:, -1] = frame
             actor_obs = pack_actor_observation(self.actor_history)
         with self.latency_tracker.measure(LatencyStage.INFERENCE):
-            if self._episode_step % self.task.controller_decimation == 0:
-                controller_obs = self._controller_observation(frame)
-                raw = self._infer(self.controller, {"actor_obs": controller_obs}, LATENT_DIM, "controller")
-                self.latent = project_latent(raw)
-                if self.task.print_observations:
-                    print("BFM controller actor_obs:", controller_obs)
+            self._update_latent(frame)
             motor = self._infer(self.actor, {"actor_obs": actor_obs, "latent": self.latent}, 29, "actor")
         with self.latency_tracker.measure(LatencyStage.POSTPROCESSING):
             # The exported actor already includes the source tanh * 5 convention.
@@ -322,7 +296,118 @@ class BfmWalkPolicy(BasePolicy):
             )
 
 
-class BfmKneelingPolicy(BfmWalkPolicy):
-    """Use the 357-D kneeling controller with an absolute commanded base height in metres."""
+class BfmWalkPolicy(BfmPolicy):
+    """356→256 velocity controller with a gait clock."""
 
-    kneeling: ClassVar[bool] = True
+    task_type: ClassVar[type] = BfmTaskConfig
+    input_names: ClassVar[frozenset[str]] = frozenset({"vx", "vy", "yaw"})
+    command_obs: ClassVar[dict[str, tuple[int, str]]] = {
+        "command": (3, "bfm:velocity_command"),
+        "cos_phase": (2, "locomotion:cos_phase"),
+        "sin_phase": (2, "locomotion:sin_phase"),
+    }
+
+    def _phase(self) -> np.ndarray:
+        """Standing changes phase observations; the episode clock keeps advancing at controller cadence."""
+        velocity = np.asarray([self._control["vy"], -self._control["vx"]])
+        if np.linalg.norm(velocity) < 0.01 and abs(self._control["yaw"]) < 0.01:
+            return np.full((1, 2), np.pi)
+        controller_step = self._episode_step // self.task.controller_decimation
+        phase = controller_step * self.task.controller_decimation / self.rl_rate * (
+            2 * np.pi / self.task.gait_period
+        ) + np.array([[0.0, -np.pi]])
+        return np.fmod(phase + np.pi, 2 * np.pi) - np.pi
+
+    def _command_observation(self) -> dict[str, np.ndarray]:
+        phase = self._phase()
+        return {
+            "command": np.asarray([[self._control["vy"], -self._control["vx"], -self._control["yaw"]]]),
+            "cos_phase": np.cos(phase),
+            "sin_phase": np.sin(phase),
+        }
+
+
+class BfmKneelingPolicy(BfmWalkPolicy):
+    """357→256 kneeling controller: walk commands plus an absolute base height in metres."""
+
+    input_names: ClassVar[frozenset[str]] = BfmWalkPolicy.input_names | {"height"}
+    command_obs: ClassVar[dict[str, tuple[int, str]]] = {
+        **BfmWalkPolicy.command_obs,
+        "height_command": (1, "base_height:base_height_command"),
+    }
+
+    def _setup_task(self) -> None:
+        if self._input_parameters["height"].min <= 0:
+            raise ValueError("BFM kneeling height must remain positive")
+
+    def _command_observation(self) -> dict[str, np.ndarray]:
+        return {**super()._command_observation(), "height_command": np.asarray([[self._control["height"]]])}
+
+
+class BfmPoseTransitionPolicy(BfmPolicy):
+    """Holosoma bfm_pose_transition: settle on the source latent, follow learned waypoints, hold the target.
+
+    The 896→256 controller outputs a raw tangent residual every four actor ticks; the actor latent is
+    slerped between consecutive waypoints at 50 Hz. Goal latents and target features come from an
+    offline bank built by scripts/bfm_pose_bank.py.
+    """
+
+    task_type: ClassVar[type] = BfmPoseTransitionTaskConfig
+    command_obs: ClassVar[dict[str, tuple[int, str]]] = {
+        "goal_latents": (2 * LATENT_DIM, "bfm_waypoint:goal_latents"),
+        "target": (33, "pose_transition:target_pose"),
+        "timing": (2, "bfm_waypoint:timing"),
+    }
+
+    def _setup_task(self) -> None:
+        with np.load(self.task.pose_bank_path, allow_pickle=False) as bank:
+            names = bank["pose_names"].tolist()
+            if tuple(bank["joint_names"].tolist()) != JOINT_NAMES:
+                raise ValueError("BFM pose bank joint order does not match G1")
+            latents, targets = bank["latents"], bank["targets"]
+        if latents.shape != (len(names), LATENT_DIM) or targets.shape != (len(names), 33):
+            raise ValueError("BFM pose bank must contain (N, 256) latents and (N, 33) targets")
+        if not np.allclose(np.linalg.norm(latents, axis=-1), LATENT_DIM**0.5, atol=1e-3):
+            raise ValueError("BFM pose bank latents must have radius 16")
+        for name in (self.task.source_pose, self.task.target_pose):
+            if name not in names:
+                raise ValueError(f"BFM pose {name!r} is not in the bank: {names}")
+        source, target = names.index(self.task.source_pose), names.index(self.task.target_pose)
+        self.source_latent = latents[source : source + 1].astype(np.float32)
+        self.target_latent = latents[target : target + 1].astype(np.float32)
+        self.goal_latents = np.concatenate((self.source_latent, self.target_latent), axis=1)
+        self.target_features = targets[target : target + 1].astype(np.float32)
+
+    def _reset_episode(self) -> None:
+        super()._reset_episode()
+        self.latent = self.source_latent
+        self.from_node = self.to_node = self.source_latent
+
+    def _command_observation(self) -> dict[str, np.ndarray]:
+        duration = self.task.transition_duration_s
+        progress = np.clip((self._episode_step / self.rl_rate - self.task.settle_s) / duration, -1, 2)
+        return {
+            "goal_latents": self.goal_latents,
+            "target": self.target_features,
+            "timing": np.asarray([[progress, duration]]),
+        }
+
+    def _update_latent(self, frame: np.ndarray) -> None:
+        settle, duration = self.task.settle_s, self.task.transition_duration_s
+        decimation = self.task.controller_decimation
+        time = self._episode_step / self.rl_rate
+        step_start = (self._episode_step - self._episode_step % decimation) / self.rl_rate
+        step_dt = decimation / self.rl_rate
+        if self._episode_step % decimation == 0 and time < settle + duration:
+            residual = self._run_controller(frame).astype(np.float64)
+            phase = (step_start + step_dt - settle) / duration
+            self.from_node = self.to_node
+            self.to_node = residual_waypoint(self.source_latent, self.target_latent, phase, residual)
+        if time < settle:
+            self.latent = self.source_latent
+        elif time >= settle + duration:
+            self.latent = self.target_latent
+        else:
+            start, end = max(step_start, settle), min(step_start + step_dt, settle + duration)
+            fraction = float(np.clip((time - start) / max(end - start, 1 / self.rl_rate), 0, 1))
+            self.latent = slerp(self.from_node, self.to_node, fraction)

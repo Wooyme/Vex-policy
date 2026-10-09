@@ -10,6 +10,7 @@ from .observation import ObservationConfig
 from .robot import RobotConfig
 from .safety import EmergencyStopConfig, LimiterConfig
 from .task import (
+    BfmPoseTransitionTaskConfig,
     BfmTaskConfig,
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
@@ -32,6 +33,7 @@ class InferenceConfig:
     task: (
         TaskConfig
         | BfmTaskConfig
+        | BfmPoseTransitionTaskConfig
         | WbtTaskConfig
         | SonicTaskConfig
         | WaistLocomotionTaskConfig

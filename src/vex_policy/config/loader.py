@@ -9,6 +9,7 @@ import yaml
 
 from vex_policy.config.config_types import (
     ActionMaskConfig,
+    BfmPoseTransitionTaskConfig,
     BfmTaskConfig,
     GuardConfig,
     HoldPositionTaskConfig,
@@ -101,6 +102,12 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
                 path_fields.append("motion_data_path")
             elif spec.task.motion_data_path is not None:
                 raise ValueError("BFM walk uses the checkpoint's standing pose, not a motion reference")
+        if spec.implementation == "bfm_pose_transition":
+            if not isinstance(spec.task, BfmPoseTransitionTaskConfig):
+                raise ValueError(f"Policy {spec.name!r} requires BfmPoseTransitionTaskConfig")
+            if spec.type != "full_body" or spec.inputs:
+                raise ValueError(f"BFM policy {spec.name!r} requires full_body with empty inputs")
+            path_fields += ["actor_model_path", "pose_bank_path"]
         if spec.implementation == "hold_position" and not isinstance(spec.task, HoldPositionTaskConfig):
             raise ValueError(f"Policy {spec.name!r} requires HoldPositionTaskConfig")
         if spec.implementation == "reference_locomotion":

@@ -1,0 +1,29 @@
+name: bfm-doggy0-to-ridding1
+implementation: bfm_pose_transition
+type: full_body
+inputs: []
+observation:
+  obs_dict:
+    actor_obs: [ frame ]
+    command_obs: [ goal_latents, target, timing ]
+    latent_history_obs: [ latent ]
+  obs_dims: { frame: 93, goal_latents: 512, target: 33, timing: 2, latent: 256 }
+  obs_scales: { frame: 1.0, goal_latents: 1.0, target: 1.0, timing: 1.0, latent: 1.0 }
+  history_length_dict: { actor_obs: 1, command_obs: 1, latent_history_obs: 1 }
+task:
+  # TEMPLATE: select a Holosoma g1_29dof_bfm_pose_transition controller; its export is 896 -> 256.
+  # Build pose_bank.npz offline with scripts/bfm_pose_bank.py from the training goal bank.
+  # All asset paths are relative to the process working directory.
+  model_path: models/bfm/controller/pose_transition.onnx
+  actor_model_path: models/bfm/actor.onnx
+  pose_bank_path: models/bfm/pose_bank.npz
+  # Start the policy with the robot already in the source pose.
+  source_pose: doggy0_2
+  target_pose: halfkneeling_33
+  transition_duration_s: 6.0
+  settle_s: 2.0
+  rl_rate: 50.0
+  # Must equal the export's experiment_config.control_decimation (preset 4; d16 runs use 16).
+  controller_decimation: 16
+  inference_provider: cpu
+  inference_threads: 1

@@ -15,7 +15,7 @@ from vex_policy.config import ResolvedPolicy
 from vex_policy.config.config_types import RuntimeConfig
 from vex_policy.mqtt import CommandInbox, MqttTransport, encode_robot_state
 from vex_policy.policies.base import BasePolicy, PolicyRuntimeFault
-from vex_policy.policies.bfm import BfmKneelingPolicy, BfmWalkPolicy
+from vex_policy.policies.bfm import BfmKneelingPolicy, BfmPoseTransitionPolicy, BfmWalkPolicy
 from vex_policy.policies.hold_position import HoldPositionPolicy
 from vex_policy.policies.interpolation import InterpolationPolicy
 from vex_policy.policies.locomotion import LocomotionPolicy
@@ -39,6 +39,8 @@ def _policy_class(kind: str) -> type[BasePolicy]:
         return BfmWalkPolicy
     if kind == "bfm_kneeling":
         return BfmKneelingPolicy
+    if kind == "bfm_pose_transition":
+        return BfmPoseTransitionPolicy
     if kind == "locomotion":
         return LocomotionPolicy
     if kind == "pose_hold":

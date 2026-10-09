@@ -36,3 +36,41 @@ def project_latent(latent: np.ndarray) -> np.ndarray:
     # Calculate the norm in float64 to avoid overflowing on finite controller outputs.
     norm = np.linalg.norm(latent.astype(np.float64), axis=-1, keepdims=True)
     return (latent / np.maximum(norm, 1e-12) * LATENT_DIM**0.5).astype(np.float32)
+
+
+def _normalize(value: np.ndarray) -> np.ndarray:
+    return value / np.maximum(np.linalg.norm(value, axis=-1, keepdims=True), 1e-12)
+
+
+def slerp(left: np.ndarray, right: np.ndarray, fraction: float) -> np.ndarray:
+    """Interpolate source-radius latents, including identical and antipodal endpoints (Holosoma waypoint)."""
+    a, b = _normalize(np.asarray(left, np.float64)), _normalize(np.asarray(right, np.float64))
+    if fraction <= 0:
+        return (a * LATENT_DIM**0.5).astype(np.float32)
+    if fraction >= 1:
+        return (b * LATENT_DIM**0.5).astype(np.float32)
+    cosine = np.clip((a * b).sum(-1, keepdims=True), -1, 1)
+    if cosine.min() > 1 - 1e-6:
+        value = _normalize((1 - fraction) * a + fraction * b)
+    else:
+        tangent = b - cosine * a
+        if np.linalg.norm(tangent) < 1e-6:
+            # Exact antipodes have no unique great circle: choose a deterministic normal.
+            axis = np.zeros_like(a)
+            axis[..., np.abs(a).argmin(-1)] = 1
+            tangent = axis - (axis * a).sum(-1, keepdims=True) * a
+        angle = np.arccos(cosine)
+        value = np.cos(angle * fraction) * a + np.sin(angle * fraction) * _normalize(tangent)
+    return (value * LATENT_DIM**0.5).astype(np.float32)
+
+
+def residual_waypoint(source: np.ndarray, target: np.ndarray, phase: float, residual: np.ndarray) -> np.ndarray:
+    """Minimum-jerk slerp reference plus a tangent correction bounded to radius 16, vanishing at both ends."""
+    s = float(np.clip(phase, 0, 1))
+    reference = slerp(source, target, s**3 * (10 - 15 * s + 6 * s**2)).astype(np.float64)
+    radius = LATENT_DIM**0.5
+    unit = reference / radius
+    tangent = residual - (residual * unit).sum(-1, keepdims=True) * unit
+    tangent *= radius / np.maximum(np.linalg.norm(tangent, axis=-1, keepdims=True), radius)
+    envelope = 16 * s**2 * (1 - s) ** 2
+    return (_normalize(reference + envelope * tangent) * radius).astype(np.float32)

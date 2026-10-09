@@ -42,6 +42,35 @@ class BfmTaskConfig:
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class BfmPoseTransitionTaskConfig:
+    """One timed source→target transition through learned BFM latent waypoints."""
+
+    model_path: str = Field(min_length=1)
+    actor_model_path: str = Field(min_length=1)
+    # Offline bank from scripts/bfm_pose_bank.py: goal latents and 33-D target features.
+    pose_bank_path: str = Field(min_length=1)
+    source_pose: str = Field(min_length=1)
+    target_pose: str = Field(min_length=1)
+    # Training sampled 4--8 s transitions after a 2 s source settle.
+    transition_duration_s: float = Field(default=6.0, ge=4.0, le=8.0, allow_inf_nan=False)
+    settle_s: float = Field(default=2.0, ge=0.0, allow_inf_nan=False)
+    action_mask_path: str | None = None
+    rl_rate: Literal[50.0] = 50.0
+    # Actor ticks per controller step; must match the export (Holosoma preset 4, d16 runs 16).
+    controller_decimation: int = Field(default=4, gt=0, strict=True)
+    inference_provider: Literal["auto", "cpu", "cuda"] = "cpu"
+    inference_threads: int = Field(default=1, gt=0, strict=True)
+    print_observations: bool = False
+    debug: DebugConfig = DebugConfig()
+
+    def __post_init__(self) -> None:
+        if self.source_pose == self.target_pose:
+            raise ValueError("BFM pose transition requires distinct source and target poses")
+        if self.action_mask_path is not None:
+            raise ValueError("BFM requires full-body control without action masks")
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class ReferenceLocomotionTaskConfig:
     """Holosoma locomotion actor with a selected motion frame as its residual zero."""
 
