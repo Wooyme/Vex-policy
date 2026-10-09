@@ -12,6 +12,7 @@ from .observation import ObservationConfig
 from .robot import RobotConfig
 from .safety import EmergencyStopConfig, LimiterConfig
 from .task import (
+    BfmTaskConfig,
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
     PelvisRecoveryTaskConfig,
@@ -74,6 +75,7 @@ class PolicySpec(StrictModel):
     observation: ObservationConfig
     task: (
         TaskConfig
+        | BfmTaskConfig
         | WbtTaskConfig
         | SonicTaskConfig
         | WaistLocomotionTaskConfig
@@ -94,6 +96,8 @@ class PolicySpec(StrictModel):
         if not isinstance(value, dict) or not isinstance(value.get("task"), dict):
             return value
         task_types = {
+            "bfm_walk": BfmTaskConfig,
+            "bfm_kneeling": BfmTaskConfig,
             "hold_position": HoldPositionTaskConfig,
             "interpolation": InterpolationTaskConfig,
             "sonic": SonicTaskConfig,

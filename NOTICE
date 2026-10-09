@@ -6,3 +6,9 @@ Licensed under the Apache License, Version 2.0.
 
 Unitree SDK2 Python is distributed under the BSD 3-Clause License by
 Unitree Robotics. The SDK is an installation dependency and is not vendored.
+
+BFM actor conversion in src/vex_policy/bfm_export.py is adapted from
+Holosoma's frozen inference implementation following BFM-Zero/humanoidverse
+(Meta Platforms et al.), licensed under CC BY-NC 4.0. The converter includes
+the actor architecture and normalization only; training networks and model
+weights are not bundled. See LICENSE-BFM-Zero.txt for the component license.

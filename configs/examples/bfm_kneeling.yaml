@@ -1,0 +1,38 @@
+name: bfm-kneeling
+implementation: bfm_kneeling
+type: full_body
+inputs:
+- type: joystick
+  x: {name: vx, min: -0.6, max: 0.6, default: 0.0}
+  y: {name: vy, min: -0.6, max: 0.6, default: 0.0}
+- type: slider
+  parameter: {name: yaw, min: -0.6, max: 0.6, default: 0.0}
+- type: slider
+  # Example heights in metres, NOT a calibration for a selected training run.
+  # Replace min/max/default: source range is ground-corrected reference height + [-0.25, 0.1].
+  # The NPZ's raw root Z is not necessarily the ground-corrected reference height.
+  parameter: {name: height, min: 0.25, max: 0.6, default: 0.5}
+observation:
+  obs_dict:
+    actor_obs: [frame]
+    command_obs: [command, cos_phase, height_command, sin_phase]
+    latent_history_obs: [latent]
+  obs_dims: {frame: 93, command: 3, cos_phase: 2, height_command: 1, sin_phase: 2, latent: 256}
+  obs_scales: {frame: 1.0, command: 1.0, cos_phase: 1.0, height_command: 1.0, sin_phase: 1.0, latent: 1.0}
+  history_length_dict: {actor_obs: 1, command_obs: 1, latent_history_obs: 1}
+task:
+  # TEMPLATE: select a Holosoma bfm_kneeling controller; its export is 357 -> 256.
+  # Select the same reference frame as training; it is used only for startup checks.
+  # All asset paths are relative to the process working directory.
+  model_path: models/bfm/kneeling.onnx
+  actor_model_path: models/bfm/actor.onnx
+  motion_data_path: reference/kneeling.npz
+  reference_pose_frame: -1
+  rl_rate: 50.0
+  controller_decimation: 4
+  gait_period: 1.0
+  inference_provider: cpu
+  inference_threads: 1
+guard:
+  startup_joint_tolerance_rad: 0.2
+  startup_gravity_tolerance: 0.2

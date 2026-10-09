@@ -9,6 +9,7 @@ import yaml
 
 from vex_policy.config.config_types import (
     ActionMaskConfig,
+    BfmTaskConfig,
     GuardConfig,
     HoldPositionTaskConfig,
     InferenceConfig,
@@ -90,6 +91,16 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
     rates: set[float] = set()
     for spec in runtime.policies:
         path_fields = [] if spec.implementation in {"hold_position", "interpolation"} else ["model_path"]
+        if spec.implementation in {"bfm_walk", "bfm_kneeling"}:
+            if not isinstance(spec.task, BfmTaskConfig):
+                raise ValueError(f"Policy {spec.name!r} requires BfmTaskConfig")
+            if spec.type != "full_body" or spec.task.action_mask_path is not None:
+                raise ValueError(f"BFM policy {spec.name!r} requires full_body without action masks")
+            path_fields.append("actor_model_path")
+            if spec.implementation == "bfm_kneeling":
+                path_fields.append("motion_data_path")
+            elif spec.task.motion_data_path is not None:
+                raise ValueError("BFM walk uses the checkpoint's standing pose, not a motion reference")
         if spec.implementation == "hold_position" and not isinstance(spec.task, HoldPositionTaskConfig):
             raise ValueError(f"Policy {spec.name!r} requires HoldPositionTaskConfig")
         if spec.implementation == "reference_locomotion":

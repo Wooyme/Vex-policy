@@ -1,0 +1,29 @@
+name: bfm-walk
+implementation: bfm_walk
+type: full_body
+inputs:
+  - type: joystick
+    x: { name: vx, min: -1.0, max: 1.0, default: 0.0 }
+    y: { name: vy, min: -1.0, max: 1.0, default: 0.0 }
+  - type: slider
+    parameter: { name: yaw, min: -1.0, max: 1.0, default: 0.0 }
+observation:
+  obs_dict:
+    actor_obs: [ frame ]
+    command_obs: [ command, cos_phase, sin_phase ]
+    latent_history_obs: [ latent ]
+  obs_dims: { frame: 93, command: 3, cos_phase: 2, sin_phase: 2, latent: 256 }
+  obs_scales: { frame: 1.0, command: 1.0, cos_phase: 1.0, sin_phase: 1.0, latent: 1.0 }
+  history_length_dict: { actor_obs: 1, command_obs: 1, latent_history_obs: 1 }
+task:
+  # TEMPLATE: select a Holosoma bfm_walk controller; its export is 356 -> 256.
+  # Convert the frozen actor using vex-bfm-export-actor (normalization and x5 included).
+  # All asset paths are relative to the process working directory.
+  model_path: models/bfm/controller/walk.onnx
+  actor_model_path: models/bfm/actor.onnx
+  rl_rate: 50.0
+  controller_decimation: 4
+  gait_period: 1.0
+  inference_provider: cpu
+  inference_threads: 1
+

@@ -16,6 +16,32 @@ class DebugConfig:
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class BfmTaskConfig:
+    """A 12.5 Hz latent controller driving a frozen 50 Hz G1 actor."""
+
+    model_path: str = Field(min_length=1)
+    actor_model_path: str = Field(min_length=1)
+    motion_data_path: str | None = None
+    reference_pose_frame: int = Field(default=-1, strict=True)
+    action_mask_path: str | None = None
+    # Holosoma's BFM contract: 200 Hz physics / 4 actor steps / 4 controller steps.
+    rl_rate: Literal[50.0] = 50.0
+    controller_decimation: Literal[4] = 4
+    gait_period: float = Field(default=1.0, gt=0.0, allow_inf_nan=False)
+    inference_provider: Literal["auto", "cpu", "cuda"] = "cpu"
+    # One CPU thread avoids oversubscribing the 50 Hz loop on many-core hosts.
+    inference_threads: int = Field(default=1, gt=0, strict=True)
+    print_observations: bool = False
+    debug: DebugConfig = DebugConfig()
+
+    def __post_init__(self) -> None:
+        if not self.model_path.strip() or not self.actor_model_path.strip():
+            raise ValueError("BFM model paths must not be empty")
+        if self.action_mask_path is not None:
+            raise ValueError("BFM requires full-body control without action masks")
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class ReferenceLocomotionTaskConfig:
     """Holosoma locomotion actor with a selected motion frame as its residual zero."""
 

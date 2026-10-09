@@ -382,6 +382,47 @@ inputs:
   parameter: {name: yaw, min: -1.0, max: 1.0, default: 0.0}
 ```
 
+## Holosoma BFM walk / kneeling
+
+`configs/g1/bfm_walk.yaml` 和 `configs/examples/bfm_kneeling.yaml` 是 G1 全身策略模板。
+上层控制器以 12.5 Hz 输出 256 维 latent，投影到半径 16 的球面；底层冻结 actor
+以 50 Hz 输出 29 维 motor action。运行服务及其他同时加载的策略使用 50 Hz。
+模板未附训练权重，需要自行指定对应 Holosoma 训练导出的 controller ONNX。
+walk 的 controller 接口为 `actor_obs[1,356] → action[1,256]`，kneeling 为
+`actor_obs[1,357] → action[1,256]`；保留导出文件内的 `experiment_config`、
+`dof_names`、`kp`、`kd` 和逐关节 `action_scale` 元数据。
+
+底层 actor 使用本项目提供的转换工具，不能直接使用 UFO 的 721 维 ONNX。
+工具只加载 safetensors 中的 actor 和归一化统计，转换后自动检查 PyTorch/ONNX 数值一致性。
+
+```bash
+uv sync --extra bfm-export
+uv run --extra bfm-export vex-bfm-export-actor \
+  --checkpoint-path ~/robot/BFM-Zero/new_model_for_training_code_inference/checkpoint/model \
+  --output models/bfm/actor.onnx
+```
+
+已存在的输出需显式传入 `--overwrite`。也可用
+`python -m vex_policy.bfm_export` 调用相同工具。
+导出的接口是 `actor_obs[1,465] + latent[1,256] → action[1,29]`，包含冻结归一化
+及 `tanh * 5`；部署仅用 ONNX Runtime，`safetensors` 只用于转换。
+转换工具中的来源代码适用 `LICENSE-BFM-Zero.txt`。
+
+配置中的 `model_path` 是上层 controller，`actor_model_path` 是转换后的底层 actor。
+资产路径相对进程工作目录。`inference_provider` 支持 `cpu`、`cuda`、`auto`；
+`inference_threads` 默认 1，可按部署机器调整 CPU 线程数。两个策略可共享冻结推理会话，
+各自保存 episode 历史。启动或重新激活会清空五帧历史、motor action 和 latent。
+
+速度输入沿用现有摇杆坐标转换，walk 范围为 ±1，kneeling 为 ±0.6。
+kneeling 的 `height` 是基座绝对离地高度，单位为米，不是高度偏移。
+模板中的高度数值仅为示例；应根据所选训练任务地面修正后的参考高度设置
+`min/max/default`，源训练范围为参考高度加 `[-0.25, 0.1]`。
+NPZ 原始 root Z 不等于经过碰撞几何地面修正的参考高度。
+
+kneeling 的 `motion_data_path`、`reference_pose_frame` 选择训练参考跪姿，
+仅用于启动姿态检查；BFM 观测与残差目标始终使用冻结模型的站立 motor zeros。
+默认从对应姿态启动，不执行站立到跪姿的自动过渡。两种策略均需全身控制。
+
 ## Holosoma Reference locomotion
 
 Holosoma `g1_29dof_kneeling` 和更新后的 `g1_29dof_crawling` 共用

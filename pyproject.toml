@@ -9,7 +9,7 @@ description = "MQTT-controlled policy inference for Unitree humanoid robots"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+license-files = ["LICENSE", "NOTICE", "LICENSE-BFM-Zero.txt"]
 dependencies = [
     "defusedxml>=0.7",
     "far-unitree-sdk==0.1.7",
@@ -30,6 +30,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+bfm-export = ["safetensors>=0.4,<1"]
 viewer = [
     "dash>=3,<4",
     "plotly>=6,<7",
@@ -46,12 +47,15 @@ dev = [
 [project.scripts]
 vex-policy = "vex_policy.cli:main"
 vex-log-viewer = "log_viewer.cli:main"
+vex-bfm-export-actor = "vex_policy.bfm_export:main"
 
 [project.entry-points."vex_policy.sdk"]
 unitree = "vex_policy.sdk.unitree.unitree_interface:UnitreeInterface"
 unitree_mp = "vex_policy.sdk.unitree.unitree_interface_mp:UnitreeInterfaceMP"
 
 [project.entry-points."vex_policy.policies"]
+bfm_walk = "vex_policy.policies.bfm:BfmWalkPolicy"
+bfm_kneeling = "vex_policy.policies.bfm:BfmKneelingPolicy"
 hold_position = "vex_policy.policies.hold_position:HoldPositionPolicy"
 pose_hold = "vex_policy.policies.pose_hold:PoseHoldPolicy"
 reference_locomotion = "vex_policy.policies.reference_locomotion:ReferenceLocomotionPolicy"

@@ -10,17 +10,24 @@ import numpy as np
 import onnx
 import onnxruntime
 
-_SESSION_CACHE: dict[tuple[str, tuple[str, ...]], onnxruntime.InferenceSession] = {}
+_SESSION_CACHE: dict[tuple[str, tuple[str, ...], int | None], onnxruntime.InferenceSession] = {}
 _SESSION_CACHE_LOCK = threading.Lock()
 
 
-def shared_session(path: str, providers: list[str]) -> onnxruntime.InferenceSession:
+def shared_session(
+    path: str, providers: list[str], *, intra_op_num_threads: int | None = None
+) -> onnxruntime.InferenceSession:
     """Share read-only model sessions, never mutable episode data."""
-    key = (path, tuple(providers))
+    key = (path, tuple(providers), intra_op_num_threads)
     with _SESSION_CACHE_LOCK:
         session = _SESSION_CACHE.get(key)
         if session is None:
-            session = onnxruntime.InferenceSession(path, providers=providers)
+            if intra_op_num_threads is None:
+                session = onnxruntime.InferenceSession(path, providers=providers)
+            else:
+                options = onnxruntime.SessionOptions()
+                options.intra_op_num_threads = intra_op_num_threads
+                session = onnxruntime.InferenceSession(path, sess_options=options, providers=providers)
             _SESSION_CACHE[key] = session
         return session
 
