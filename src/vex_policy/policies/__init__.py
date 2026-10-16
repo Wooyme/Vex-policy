@@ -1,5 +1,12 @@
 from .base import BasePolicy
-from .bfm import BfmKneelingPolicy, BfmPoseTransitionPolicy, BfmWalkPolicy
+from .bfm import (
+    BfmKneelingPolicy,
+    BfmPoseTransitionPolicy,
+    BfmTokenPassiveWalkPolicy,
+    BfmWalkCodebookPolicy,
+    BfmWalkPolicy,
+    BfmWalkTokenPolicy,
+)
 from .hold_position import HoldPositionPolicy
 from .interpolation import InterpolationPolicy
 from .locomotion import LocomotionPolicy
@@ -15,7 +22,10 @@ __all__ = [
     "BasePolicy",
     "BfmKneelingPolicy",
     "BfmPoseTransitionPolicy",
+    "BfmTokenPassiveWalkPolicy",
+    "BfmWalkCodebookPolicy",
     "BfmWalkPolicy",
+    "BfmWalkTokenPolicy",
     "HoldPositionPolicy",
     "InterpolationPolicy",
     "LocomotionPolicy",

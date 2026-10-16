@@ -42,6 +42,28 @@ class BfmTaskConfig:
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class BfmTokenTaskConfig:
+    """A 12.5 Hz categorical controller choosing BFM latents from a fixed vocabulary."""
+
+    model_path: str = Field(min_length=1)
+    actor_model_path: str = Field(min_length=1)
+    # Directory with vocab.json and vocab.safetensors from Holosoma scripts/build_bfm_vocab.py.
+    vocab_path: str = Field(min_length=1)
+    action_mask_path: str | None = None
+    rl_rate: Literal[50.0] = 50.0
+    controller_decimation: Literal[4] = 4
+    gait_period: float = Field(default=1.0, gt=0.0, allow_inf_nan=False)
+    inference_provider: Literal["auto", "cpu", "cuda"] = "cpu"
+    inference_threads: int = Field(default=1, gt=0, strict=True)
+    print_observations: bool = False
+    debug: DebugConfig = DebugConfig()
+
+    def __post_init__(self) -> None:
+        if self.action_mask_path is not None:
+            raise ValueError("BFM requires full-body control without action masks")
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class BfmPoseTransitionTaskConfig:
     """One timed source→target transition through learned BFM latent waypoints."""
 

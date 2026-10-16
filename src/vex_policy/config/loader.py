@@ -11,6 +11,7 @@ from vex_policy.config.config_types import (
     ActionMaskConfig,
     BfmPoseTransitionTaskConfig,
     BfmTaskConfig,
+    BfmTokenTaskConfig,
     GuardConfig,
     HoldPositionTaskConfig,
     InferenceConfig,
@@ -92,11 +93,13 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
     rates: set[float] = set()
     for spec in runtime.policies:
         path_fields = [] if spec.implementation in {"hold_position", "interpolation"} else ["model_path"]
-        if spec.implementation in {"bfm_walk", "bfm_kneeling"}:
+        if spec.implementation in {"bfm_walk", "bfm_kneeling", "bfm_walk_codebook", "bfm_token_passive_walk"}:
             if not isinstance(spec.task, BfmTaskConfig):
                 raise ValueError(f"Policy {spec.name!r} requires BfmTaskConfig")
             if spec.type != "full_body" or spec.task.action_mask_path is not None:
                 raise ValueError(f"BFM policy {spec.name!r} requires full_body without action masks")
+            if spec.implementation == "bfm_token_passive_walk" and spec.inputs:
+                raise ValueError(f"BFM policy {spec.name!r} follows a hand tether and requires empty inputs")
             path_fields.append("actor_model_path")
             if spec.implementation == "bfm_kneeling":
                 path_fields.append("motion_data_path")
@@ -108,6 +111,12 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             if spec.type != "full_body" or spec.inputs:
                 raise ValueError(f"BFM policy {spec.name!r} requires full_body with empty inputs")
             path_fields += ["actor_model_path", "pose_bank_path"]
+        if spec.implementation == "bfm_walk_token":
+            if not isinstance(spec.task, BfmTokenTaskConfig):
+                raise ValueError(f"Policy {spec.name!r} requires BfmTokenTaskConfig")
+            if spec.type != "full_body":
+                raise ValueError(f"BFM policy {spec.name!r} requires full_body")
+            path_fields.append("actor_model_path")
         if spec.implementation == "hold_position" and not isinstance(spec.task, HoldPositionTaskConfig):
             raise ValueError(f"Policy {spec.name!r} requires HoldPositionTaskConfig")
         if spec.implementation == "reference_locomotion":
@@ -159,6 +168,11 @@ def resolve_policies(runtime: RuntimeConfig, config_path: Path) -> tuple[Resolve
             if field_name == "motion_data_path" and candidate.suffix.lower() != ".npz":
                 raise ValueError(f"Policy {spec.name!r} motion_data_path must reference an NPZ file")
             resolved_paths[field_name] = str(candidate)
+        if isinstance(spec.task, BfmTokenTaskConfig):
+            vocab = Path(spec.task.vocab_path).expanduser().resolve()
+            if not all((vocab / name).is_file() for name in ("vocab.json", "vocab.safetensors")):
+                raise ValueError(f"Policy {spec.name!r} vocab_path must contain vocab.json and vocab.safetensors")
+            resolved_paths["vocab_path"] = str(vocab)
         if isinstance(spec.task, UfoTaskConfig):
             context_path = spec.task.context.path
             if "://" in context_path:

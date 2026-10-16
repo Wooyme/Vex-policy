@@ -12,3 +12,7 @@ Holosoma's frozen inference implementation following BFM-Zero/humanoidverse
 (Meta Platforms et al.), licensed under CC BY-NC 4.0. The converter includes
 the actor architecture and normalization only; training networks and model
 weights are not bundled. See LICENSE-BFM-Zero.txt for the component license.
+
+The latent vocabulary in data/bfm_vocab/walk is copied from Holosoma and
+consists of BFM-Zero motion latents inferred with the BFM-Zero checkpoint
+(Meta Platforms et al.), licensed under CC BY-NC 4.0. See LICENSE-BFM-Zero.txt.

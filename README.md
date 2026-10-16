@@ -384,7 +384,7 @@ inputs:
 
 ## Holosoma BFM walk / kneeling
 
-`configs/g1/bfm_walk.yaml` 和 `configs/examples/bfm_kneeling.yaml` 是 G1 全身策略模板。
+`configs/examples/bfm/bfm_walk.yaml` 和 `configs/examples/bfm_kneeling.yaml` 是 G1 全身策略模板。
 上层控制器以 12.5 Hz 输出 256 维 latent，投影到半径 16 的球面；底层冻结 actor
 以 50 Hz 输出 29 维 motor action。运行服务及其他同时加载的策略使用 50 Hz。
 模板未附训练权重，需要自行指定对应 Holosoma 训练导出的 controller ONNX。
@@ -447,6 +447,42 @@ python scripts/bfm_pose_bank.py \
 `--endpoint-reference` 应使用训练命令中传入的那份（如 `run_bfm_waypoints.py` 的
 `--endpoint-reference`），而不是仓库默认文件。`controller_decimation` 必须等于导出元数据中的
 `experiment_config.control_decimation`（preset 为 4，d16 实验为 16）。
+
+## Holosoma BFM vocabulary tokens
+
+`configs/examples/bfm/bfm_walk_token.yaml`（`implementation: bfm_walk_token`）部署 Holosoma
+`g1_29dof_bfm_walk_token`。模板中 `model_path` 需替换为对应训练导出的 controller ONNX；
+底层 actor 与 walk 相同。
+
+controller 是 categorical 策略，导出接口为 `actor_obs → action[1,1]`，输出词表 token 序号
+（训练配置 `inference_top_k=5` 的 top-k 采样在 ONNX 内完成）。执行的 latent 为词表对应行
+投影到半径 16 的球面。词表从 Holosoma `models/bfm/vocab/walk` 拷贝到本仓库
+`models/bfm/vocab/walk`（`vocab.json` + `vocab.safetensors`，运行时用 numpy 直接读取，
+不依赖 safetensors）。加载时检查 controller logits 数与词表行数、训练元数据中的
+`vocab_path` 目录名与本地目录名一致；两者不一致说明词表不是训练所用版本。
+与 Holosoma 训练一致，冻结 actor 的五帧历史在启动时用第一帧填充而非全零。
+
+观测与 bfm_walk 相同（356 维）；输入范围按训练指令收窄，
+前进 `vy` 为 `[-0.6, 0.8]`，侧向 `vx` 为 ±0.5，`yaw` 为 ±1。
+
+## Holosoma BFM codebook
+
+`configs/examples/bfm/bfm_walk_codebook.yaml`（`implementation: bfm_walk_codebook`）部署 Holosoma
+`g1_29dof_bfm_walk_codebook`。观测、输入范围与 walk token 相同（356 维）。controller 先按 softmax
+选 token，再在该 token 的可学习 codeword 附近采样 latent；codeword 由 PPO 从初始词表训练偏移，
+已固化在导出图中，因此部署不需要词表（task 使用 `BfmTaskConfig`，无 `vocab_path`）。
+
+导出接口为 `actor_obs → action[1,257]`：第 0 维为 token 序号（top-k 采样在 ONNX 内完成），
+其后 256 维为无噪声 codeword。执行的 latent 是 codeword 投影到半径 16 的球面，与训练时
+`BFMCodebookAction` 一致。加载时检查训练元数据中的 action term 为 `BFMCodebookAction`、
+actor 分布为 `codebook`；冻结 actor 历史同样用第一帧填充。
+
+`configs/g1/bfm_token_passive_walk.yaml`（`implementation: bfm_token_passive_walk`）部署
+Holosoma `g1_bfm_token_passive_walk`。该实验名保留 token，但训练已改为 codebook
+（`BFMCodebookAction`，导出 `632 → [token, codeword][257]`），同样无需词表。无输入，机器人由
+手臂牵引被动行走或被托举（牵引状态与 walk/lift 任务 one-hot 仅用于训练 critic）。controller
+输入为 4 个 controller 步的 frame（旧帧在前，启动时零填充）、不随站立冻结的步态时钟和上一
+latent，共 `4×93 + 4 + 256 = 632` 维。
 
 ## Holosoma Reference locomotion
 

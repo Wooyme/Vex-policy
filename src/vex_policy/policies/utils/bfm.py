@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
+import onnx
 
 from vex_policy.robots.g1 import DOF_NAMES
 
@@ -74,3 +78,44 @@ def residual_waypoint(source: np.ndarray, target: np.ndarray, phase: float, resi
     tangent *= radius / np.maximum(np.linalg.norm(tangent, axis=-1, keepdims=True), radius)
     envelope = 16 * s**2 * (1 - s) ** 2
     return (_normalize(reference + envelope * tangent) * radius).astype(np.float32)
+
+
+_SAFETENSORS_DTYPES = {"F16": "<f2", "F32": "<f4", "F64": "<f8"}
+
+
+def load_latent_vocab(directory: str | Path) -> tuple[np.ndarray, dict]:
+    """Read a Holosoma scripts/build_bfm_vocab.py vocabulary without a safetensors dependency.
+
+    Rows are projected like BFMTokenAction (F.normalize * 16); the row index is the token.
+    """
+    directory = Path(directory)
+    metadata = json.loads((directory / "vocab.json").read_text(encoding="utf-8"))
+    raw = (directory / "vocab.safetensors").read_bytes()
+    header_size = int.from_bytes(raw[:8], "little")
+    entry = json.loads(raw[8 : 8 + header_size])["z"]
+    start, end = entry["data_offsets"]
+    dtype = np.dtype(_SAFETENSORS_DTYPES[entry["dtype"]])
+    z = np.frombuffer(raw[8 + header_size + start : 8 + header_size + end], dtype=dtype).reshape(entry["shape"])
+    if z.ndim != 2 or z.shape != (metadata["size"], LATENT_DIM) or not np.isfinite(z).all():
+        raise ValueError(f"BFM vocabulary {directory} must contain finite (size, {LATENT_DIM}) z")
+    return project_latent(z), metadata
+
+
+def categorical_choices(model_path: str | Path) -> int:
+    """Number of logits a Holosoma categorical controller export selects its token from."""
+    model = onnx.shape_inference.infer_shapes(onnx.load(str(model_path), load_external_data=False))
+    graph = model.graph
+    # top-k inference samples among TopK(logits); argmax inference reads the logits directly.
+    nodes = [node for node in graph.node if node.op_type == "TopK"] or [
+        node for node in graph.node if node.op_type == "ArgMax"
+    ]
+    if len(nodes) != 1:
+        raise ValueError("BFM token controller must select one token by TopK or ArgMax")
+    shapes = {
+        info.name: [dim.dim_value for dim in info.type.tensor_type.shape.dim]
+        for info in (*graph.value_info, *graph.input, *graph.output)
+    }
+    shape = shapes.get(nodes[0].input[0])
+    if not shape or shape[-1] <= 0:
+        raise ValueError("BFM token controller logits have no static size")
+    return shape[-1]

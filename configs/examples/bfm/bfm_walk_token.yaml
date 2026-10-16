@@ -1,0 +1,31 @@
+name: bfm-walk-token
+implementation: bfm_walk_token
+type: full_body
+inputs:
+  # Holosoma bfm_walk_token training ranges: forward (vy) [-0.6, 0.8], lateral (vx) +/-0.5, yaw +/-1.
+  - type: joystick
+    x: { name: vx, min: -0.5, max: 0.5, default: 0.0 }
+    y: { name: vy, min: -0.6, max: 0.8, default: 0.0 }
+  - type: slider
+    parameter: { name: yaw, min: -1.0, max: 1.0, default: 0.0 }
+observation:
+  obs_dict:
+    actor_obs: [ frame ]
+    command_obs: [ command, cos_phase, sin_phase ]
+    latent_history_obs: [ latent ]
+  obs_dims: { frame: 93, command: 3, cos_phase: 2, sin_phase: 2, latent: 256 }
+  obs_scales: { frame: 1.0, command: 1.0, cos_phase: 1.0, sin_phase: 1.0, latent: 1.0 }
+  history_length_dict: { actor_obs: 1, command_obs: 1, latent_history_obs: 1 }
+task:
+  # TEMPLATE: select a Holosoma g1_29dof_bfm_walk_token controller; its export is 356 -> token[1].
+  # Convert the frozen actor using vex-bfm-export-actor (normalization and x5 included).
+  # All asset paths are relative to the process working directory.
+  model_path: models/bfm/controller/walk_token.onnx
+  actor_model_path: models/bfm/actor.onnx
+  # Must be the vocabulary the controller was trained with (same directory name and size).
+  vocab_path: models/bfm/vocab/walk_query4k
+  rl_rate: 50.0
+  controller_decimation: 4
+  gait_period: 1.0
+  inference_provider: cpu
+  inference_threads: 1

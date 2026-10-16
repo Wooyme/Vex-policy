@@ -14,6 +14,7 @@ from .safety import EmergencyStopConfig, LimiterConfig
 from .task import (
     BfmPoseTransitionTaskConfig,
     BfmTaskConfig,
+    BfmTokenTaskConfig,
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
     PelvisRecoveryTaskConfig,
@@ -78,6 +79,7 @@ class PolicySpec(StrictModel):
         TaskConfig
         | BfmTaskConfig
         | BfmPoseTransitionTaskConfig
+        | BfmTokenTaskConfig
         | WbtTaskConfig
         | SonicTaskConfig
         | WaistLocomotionTaskConfig
@@ -101,6 +103,9 @@ class PolicySpec(StrictModel):
             "bfm_walk": BfmTaskConfig,
             "bfm_kneeling": BfmTaskConfig,
             "bfm_pose_transition": BfmPoseTransitionTaskConfig,
+            "bfm_walk_token": BfmTokenTaskConfig,
+            "bfm_token_passive_walk": BfmTaskConfig,
+            "bfm_walk_codebook": BfmTaskConfig,
             "hold_position": HoldPositionTaskConfig,
             "interpolation": InterpolationTaskConfig,
             "sonic": SonicTaskConfig,

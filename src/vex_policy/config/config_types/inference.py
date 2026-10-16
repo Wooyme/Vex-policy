@@ -12,6 +12,7 @@ from .safety import EmergencyStopConfig, LimiterConfig
 from .task import (
     BfmPoseTransitionTaskConfig,
     BfmTaskConfig,
+    BfmTokenTaskConfig,
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
     PelvisRecoveryTaskConfig,
@@ -34,6 +35,7 @@ class InferenceConfig:
         TaskConfig
         | BfmTaskConfig
         | BfmPoseTransitionTaskConfig
+        | BfmTokenTaskConfig
         | WbtTaskConfig
         | SonicTaskConfig
         | WaistLocomotionTaskConfig
