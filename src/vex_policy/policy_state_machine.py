@@ -15,14 +15,7 @@ from vex_policy.config import ResolvedPolicy
 from vex_policy.config.config_types import RuntimeConfig
 from vex_policy.mqtt import CommandInbox, MqttTransport, encode_robot_state
 from vex_policy.policies.base import BasePolicy, PolicyRuntimeFault
-from vex_policy.policies.bfm import (
-    BfmKneelingPolicy,
-    BfmPoseTransitionPolicy,
-    BfmTokenPassiveWalkPolicy,
-    BfmWalkCodebookPolicy,
-    BfmWalkPolicy,
-    BfmWalkTokenPolicy,
-)
+from vex_policy.policies.bfm import BfmWalkCodebookPolicy, BfmWristStudentPolicy
 from vex_policy.policies.hold_position import HoldPositionPolicy
 from vex_policy.policies.interpolation import InterpolationPolicy
 from vex_policy.policies.locomotion import LocomotionPolicy
@@ -42,18 +35,10 @@ def _policy_class(kind: str) -> type[BasePolicy]:
     for ep in entry_points(group="vex_policy.policies"):
         if ep.name == kind:
             return ep.load()
-    if kind == "bfm_walk":
-        return BfmWalkPolicy
-    if kind == "bfm_kneeling":
-        return BfmKneelingPolicy
-    if kind == "bfm_pose_transition":
-        return BfmPoseTransitionPolicy
-    if kind == "bfm_walk_token":
-        return BfmWalkTokenPolicy
-    if kind == "bfm_token_passive_walk":
-        return BfmTokenPassiveWalkPolicy
     if kind == "bfm_walk_codebook":
         return BfmWalkCodebookPolicy
+    if kind == "bfm_wrist_student":
+        return BfmWristStudentPolicy
     if kind == "locomotion":
         return LocomotionPolicy
     if kind == "pose_hold":

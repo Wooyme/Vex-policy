@@ -15,9 +15,7 @@ from .runtime import (
 )
 from .safety import EmergencyStopConfig, LimiterConfig
 from .task import (
-    BfmPoseTransitionTaskConfig,
     BfmTaskConfig,
-    BfmTokenTaskConfig,
     DebugConfig,
     HoldPositionTaskConfig,
     InterpolationTaskConfig,
@@ -37,9 +35,7 @@ from .task import (
 
 __all__ = [
     "ActionMaskConfig",
-    "BfmPoseTransitionTaskConfig",
     "BfmTaskConfig",
-    "BfmTokenTaskConfig",
     "DebugConfig",
     "EmergencyStopConfig",
     "GuardConfig",

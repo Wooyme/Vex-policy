@@ -382,15 +382,13 @@ inputs:
   parameter: {name: yaw, min: -1.0, max: 1.0, default: 0.0}
 ```
 
-## Holosoma BFM walk / kneeling
+## Holosoma BFM codebook walk
 
-`configs/examples/bfm/bfm_walk.yaml` 和 `configs/examples/bfm_kneeling.yaml` 是 G1 全身策略模板。
-上层控制器以 12.5 Hz 输出 256 维 latent，投影到半径 16 的球面；底层冻结 actor
-以 50 Hz 输出 29 维 motor action。运行服务及其他同时加载的策略使用 50 Hz。
-模板未附训练权重，需要自行指定对应 Holosoma 训练导出的 controller ONNX。
-walk 的 controller 接口为 `actor_obs[1,356] → action[1,256]`，kneeling 为
-`actor_obs[1,357] → action[1,256]`；保留导出文件内的 `experiment_config`、
-`dof_names`、`kp`、`kd` 和逐关节 `action_scale` 元数据。
+`configs/examples/bfm/bfm_walk_codebook.yaml`（`implementation: bfm_walk_codebook`）部署 Holosoma
+`g1_29dof_bfm_walk_codebook`，是 G1 全身策略模板。上层 controller 以 12.5 Hz 选择 latent，
+底层冻结 actor 以 50 Hz 输出 29 维 motor action。运行服务及其他同时加载的策略使用 50 Hz。
+模板未附训练权重，需要自行指定对应 Holosoma 训练导出的 controller ONNX，并保留导出文件内的
+`experiment_config`、`dof_names`、`kp`、`kd` 和逐关节 `action_scale` 元数据。
 
 底层 actor 使用本项目提供的转换工具，不能直接使用 UFO 的 721 维 ONNX。
 工具只加载 safetensors 中的 actor 和归一化统计，转换后自动检查 PyTorch/ONNX 数值一致性。
@@ -410,79 +408,20 @@ uv run --extra bfm-export vex-bfm-export-actor \
 
 配置中的 `model_path` 是上层 controller，`actor_model_path` 是转换后的底层 actor。
 资产路径相对进程工作目录。`inference_provider` 支持 `cpu`、`cuda`、`auto`；
-`inference_threads` 默认 1，可按部署机器调整 CPU 线程数。两个策略可共享冻结推理会话，
+`inference_threads` 默认 1，可按部署机器调整 CPU 线程数。多个策略可共享冻结推理会话，
 各自保存 episode 历史。启动或重新激活会清空五帧历史、motor action 和 latent。
+策略需全身控制。
 
-速度输入沿用现有摇杆坐标转换，walk 范围为 ±1，kneeling 为 ±0.6。
-kneeling 的 `height` 是基座绝对离地高度，单位为米，不是高度偏移。
-模板中的高度数值仅为示例；应根据所选训练任务地面修正后的参考高度设置
-`min/max/default`，源训练范围为参考高度加 `[-0.25, 0.1]`。
-NPZ 原始 root Z 不等于经过碰撞几何地面修正的参考高度。
-
-kneeling 的 `motion_data_path`、`reference_pose_frame` 选择训练参考跪姿，
-仅用于启动姿态检查；BFM 观测与残差目标始终使用冻结模型的站立 motor zeros。
-默认从对应姿态启动，不执行站立到跪姿的自动过渡。两种策略均需全身控制。
-
-## Holosoma BFM pose transition
-
-`configs/g1/bfm_pose_transition.yaml` 部署 Holosoma `g1_29dof_bfm_pose_transition`：
-从 `source_pose` 到 `target_pose` 的一次定时过渡。策略激活时机器人应已处于源姿态；
-前 `settle_s` 秒执行源姿态 latent，随后在 `transition_duration_s`（训练范围 4–8 s）内
-按 controller 输出的残差 waypoint 过渡，之后保持目标 latent，controller 不再运行。
-controller 接口为 `actor_obs[1,896] → action[1,256]`（frame 93 + goal_latents 512 +
-target 33 + timing 2 + latent 256），底层 actor 与 walk 相同。无 MQTT 输入。
-
-每个姿态的 goal latent 与 33 维目标特征（端点关节相对 motor zeros、重力投影、根高度）
-都是常量，由独立脚本离线计算（仅依赖 numpy），运行时只加载结果：
-
-```bash
-python scripts/bfm_pose_bank.py \
-  --goal-bank ~/robot/holosoma/src/holosoma/holosoma/data/bfm_goal_bank.npz \
-  --endpoint-reference ~/robot/holosoma/src/holosoma/holosoma/data/bfm_endpoint_reference.npz \
-  --output models/bfm/pose_bank.npz
-```
-
-`source_pose`/`target_pose` 取 bank 中的 `pose_names`。bank 必须与训练该 controller 时
-使用的 goal bank 一致。
-`--endpoint-reference` 应使用训练命令中传入的那份（如 `run_bfm_waypoints.py` 的
-`--endpoint-reference`），而不是仓库默认文件。`controller_decimation` 必须等于导出元数据中的
-`experiment_config.control_decimation`（preset 为 4，d16 实验为 16）。
-
-## Holosoma BFM vocabulary tokens
-
-`configs/examples/bfm/bfm_walk_token.yaml`（`implementation: bfm_walk_token`）部署 Holosoma
-`g1_29dof_bfm_walk_token`。模板中 `model_path` 需替换为对应训练导出的 controller ONNX；
-底层 actor 与 walk 相同。
-
-controller 是 categorical 策略，导出接口为 `actor_obs → action[1,1]`，输出词表 token 序号
-（训练配置 `inference_top_k=5` 的 top-k 采样在 ONNX 内完成）。执行的 latent 为词表对应行
-投影到半径 16 的球面。词表从 Holosoma `models/bfm/vocab/walk` 拷贝到本仓库
-`models/bfm/vocab/walk`（`vocab.json` + `vocab.safetensors`，运行时用 numpy 直接读取，
-不依赖 safetensors）。加载时检查 controller logits 数与词表行数、训练元数据中的
-`vocab_path` 目录名与本地目录名一致；两者不一致说明词表不是训练所用版本。
-与 Holosoma 训练一致，冻结 actor 的五帧历史在启动时用第一帧填充而非全零。
-
-观测与 bfm_walk 相同（356 维）；输入范围按训练指令收窄，
-前进 `vy` 为 `[-0.6, 0.8]`，侧向 `vx` 为 ±0.5，`yaw` 为 ±1。
-
-## Holosoma BFM codebook
-
-`configs/examples/bfm/bfm_walk_codebook.yaml`（`implementation: bfm_walk_codebook`）部署 Holosoma
-`g1_29dof_bfm_walk_codebook`。观测、输入范围与 walk token 相同（356 维）。controller 先按 softmax
-选 token，再在该 token 的可学习 codeword 附近采样 latent；codeword 由 PPO 从初始词表训练偏移，
-已固化在导出图中，因此部署不需要词表（task 使用 `BfmTaskConfig`，无 `vocab_path`）。
+controller 观测为 356 维（frame 93 + 速度指令 3 + 步态相位 4 + 上一 latent 256），
+速度输入沿用现有摇杆坐标转换，范围按训练指令收窄：前进 `vy` 为 `[-0.6, 0.8]`，
+侧向 `vx` 为 ±0.5，`yaw` 为 ±1。controller 先按 softmax 选 token，再在该 token 的可学习
+codeword 附近采样 latent；codeword 由 PPO 从初始词表训练偏移，已固化在导出图中，
+因此部署不需要词表。
 
 导出接口为 `actor_obs → action[1,257]`：第 0 维为 token 序号（top-k 采样在 ONNX 内完成），
 其后 256 维为无噪声 codeword。执行的 latent 是 codeword 投影到半径 16 的球面，与训练时
 `BFMCodebookAction` 一致。加载时检查训练元数据中的 action term 为 `BFMCodebookAction`、
-actor 分布为 `codebook`；冻结 actor 历史同样用第一帧填充。
-
-`configs/g1/bfm_token_passive_walk.yaml`（`implementation: bfm_token_passive_walk`）部署
-Holosoma `g1_bfm_token_passive_walk`。该实验名保留 token，但训练已改为 codebook
-（`BFMCodebookAction`，导出 `632 → [token, codeword][257]`），同样无需词表。无输入，机器人由
-手臂牵引被动行走或被托举（牵引状态与 walk/lift 任务 one-hot 仅用于训练 critic）。controller
-输入为 4 个 controller 步的 frame（旧帧在前，启动时零填充）、不随站立冻结的步态时钟和上一
-latent，共 `4×93 + 4 + 256 = 632` 维。
+actor 分布为 `codebook`；与 Holosoma 训练一致，冻结 actor 的五帧历史在启动时用第一帧填充而非全零。
 
 ## Holosoma Reference locomotion
 

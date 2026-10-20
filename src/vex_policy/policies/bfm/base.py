@@ -1,22 +1,15 @@
-"""Holosoma BFM controllers (walk, kneeling, pose transition, tokens, codebook) driving a frozen actor."""
+"""Shared runtime for Holosoma BFM latent controllers driving the frozen actor."""
 
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
 
-from vex_policy.config.config_types import (
-    BfmPoseTransitionTaskConfig,
-    BfmTaskConfig,
-    BfmTokenTaskConfig,
-    InferenceConfig,
-    input_parameters,
-)
+from vex_policy.config.config_types import InferenceConfig, input_parameters
 from vex_policy.policies.base import BasePolicy, PolicyRuntimeFault
-from vex_policy.policies.utils.bfm import (
+from vex_policy.policies.bfm.contract import (
     ACTOR_CONTRACT_VERSION,
     ACTOR_HISTORY_LENGTH,
     ACTOR_OBS_DIM,
@@ -24,12 +17,8 @@ from vex_policy.policies.utils.bfm import (
     FRAME_DIM,
     JOINT_NAMES,
     LATENT_DIM,
-    categorical_choices,
-    load_latent_vocab,
     pack_actor_observation,
     project_latent,
-    residual_waypoint,
-    slerp,
 )
 from vex_policy.policies.utils.inference import load_metadata, resolve_control_gains, shared_session
 from vex_policy.policies.utils.initial_pose import normalize_quaternion_wxyz
@@ -68,15 +57,6 @@ def _joint_vector(value, label: str, *, nonnegative: bool = False) -> np.ndarray
     return values
 
 
-def _token(action: np.ndarray, choices: int) -> int:
-    """The integral token index a categorical or codebook export emits first."""
-    value = float(action[0, 0])
-    token = round(value)
-    if abs(value - token) > 1e-3 or not 0 <= token < choices:
-        raise PolicyRuntimeFault(f"BFM token controller returned invalid token {value}")
-    return token
-
-
 class BfmPolicy(BasePolicy):
     """Run a latent controller every four cycles and the frozen 465+256→29 actor every cycle.
 
@@ -85,13 +65,14 @@ class BfmPolicy(BasePolicy):
     """
 
     task_type: ClassVar[type]
-    # Controller group holding command_obs; command-free tasks name it after their terms.
+    # Controller group names in training order: frames, commands, then the executed latent.
+    frame_group: ClassVar[str] = "actor_obs"
     command_group: ClassVar[str] = "command_obs"
+    # Oldest-first controller-cadence frames; Holosoma zero-pads history after a reset.
+    frame_history: ClassVar[int] = 1
     # command_obs term -> (dimension, Holosoma observation function relative to managers.observation.terms).
     command_obs: ClassVar[dict[str, tuple[int, str]]]
     input_names: ClassVar[frozenset[str]] = frozenset()
-    # Oldest-first, zero-padded controller frames, one per controller step (Holosoma group history).
-    frame_history: ClassVar[int] = 1
     # Holosoma repeats the first frame into the frozen actor history since its token training.
     repeat_first_actor_frame: ClassVar[bool] = False
     controller_output_dim: ClassVar[int] = LATENT_DIM
@@ -109,11 +90,11 @@ class BfmPolicy(BasePolicy):
         if self._input_parameters.keys() != self.input_names:
             raise ValueError(f"{type(self).__name__} inputs must be exactly {sorted(self.input_names)}")
         self._groups = {
-            "actor_obs": {"frame": FRAME_DIM},
+            self.frame_group: {"frame": FRAME_DIM},
             self.command_group: {term: dimension for term, (dimension, _) in self.command_obs.items()},
             "latent_history_obs": {"latent": LATENT_DIM},
         }
-        self._history = {group: self.frame_history if group == "actor_obs" else 1 for group in self._groups}
+        self._history = {group: self.frame_history if group == self.frame_group else 1 for group in self._groups}
         self._setup_task()
         self._validate_observations()
         providers = ort_providers(self.task.inference_provider)
@@ -181,7 +162,7 @@ class BfmPolicy(BasePolicy):
                 or simulator["fps"] != self.rl_rate * simulator["control_decimation"]
             ):
                 raise ValueError("BFM controller was not trained with a 50 Hz frozen actor")
-            # Kneeling's reference joints must not become the frozen actor's residual zeros.
+            # The training reset pose must not redefine the frozen actor's residual zeros.
             training_zeros = experiment["robot"]["init_state"]["default_joint_angles"]
             if not np.allclose([training_zeros[name] for name in JOINT_NAMES], zeros, rtol=0, atol=1e-7):
                 raise ValueError("BFM controller motor zeros differ from the frozen actor")
@@ -278,6 +259,14 @@ class BfmPolicy(BasePolicy):
         """Map a controller action to the executed radius-16 latent."""
         return project_latent(action)
 
+    def _clock_phase(self) -> np.ndarray:
+        """Holosoma's evaluation gait clock: mean frequency, offsets [0, -pi], at controller cadence."""
+        controller_step = self._episode_step // self.task.controller_decimation
+        phase = controller_step * self.task.controller_decimation / self.rl_rate * (
+            2 * np.pi / self.task.gait_period
+        ) + np.array([[0.0, -np.pi]])
+        return np.fmod(phase + np.pi, 2 * np.pi) - np.pi
+
     def _update_latent(self, frame: np.ndarray) -> None:
         """Refresh the executed latent at controller cadence."""
         if self._episode_step % self.task.controller_decimation == 0:
@@ -332,220 +321,3 @@ class BfmPolicy(BasePolicy):
             return position_command(
                 target, self.robot_config.motor_kp, self.robot_config.motor_kd, self.controlled_joint_mask
             )
-
-
-class BfmWalkPolicy(BfmPolicy):
-    """356→256 velocity controller with a gait clock."""
-
-    task_type: ClassVar[type] = BfmTaskConfig
-    input_names: ClassVar[frozenset[str]] = frozenset({"vx", "vy", "yaw"})
-    command_obs: ClassVar[dict[str, tuple[int, str]]] = {
-        "command": (3, "bfm:velocity_command"),
-        "cos_phase": (2, "locomotion:cos_phase"),
-        "sin_phase": (2, "locomotion:sin_phase"),
-    }
-
-    def _phase(self) -> np.ndarray:
-        """Standing changes phase observations; the episode clock keeps advancing at controller cadence."""
-        velocity = np.asarray([self._control["vy"], -self._control["vx"]])
-        if np.linalg.norm(velocity) < 0.01 and abs(self._control["yaw"]) < 0.01:
-            return np.full((1, 2), np.pi)
-        return self._clock_phase()
-
-    def _clock_phase(self) -> np.ndarray:
-        """Holosoma's evaluation gait clock: mean frequency, offsets [0, -pi], at controller cadence."""
-        controller_step = self._episode_step // self.task.controller_decimation
-        phase = controller_step * self.task.controller_decimation / self.rl_rate * (
-            2 * np.pi / self.task.gait_period
-        ) + np.array([[0.0, -np.pi]])
-        return np.fmod(phase + np.pi, 2 * np.pi) - np.pi
-
-    def _command_observation(self) -> dict[str, np.ndarray]:
-        phase = self._phase()
-        return {
-            "command": np.asarray([[self._control["vy"], -self._control["vx"], -self._control["yaw"]]]),
-            "cos_phase": np.cos(phase),
-            "sin_phase": np.sin(phase),
-        }
-
-
-class BfmKneelingPolicy(BfmWalkPolicy):
-    """357→256 kneeling controller: walk commands plus an absolute base height in metres."""
-
-    input_names: ClassVar[frozenset[str]] = BfmWalkPolicy.input_names | {"height"}
-    command_obs: ClassVar[dict[str, tuple[int, str]]] = {
-        **BfmWalkPolicy.command_obs,
-        "height_command": (1, "base_height:base_height_command"),
-    }
-
-    def _setup_task(self) -> None:
-        if self._input_parameters["height"].min <= 0:
-            raise ValueError("BFM kneeling height must remain positive")
-
-    def _command_observation(self) -> dict[str, np.ndarray]:
-        return {**super()._command_observation(), "height_command": np.asarray([[self._control["height"]]])}
-
-
-class BfmPoseTransitionPolicy(BfmPolicy):
-    """Holosoma bfm_pose_transition: settle on the source latent, follow learned waypoints, hold the target.
-
-    The 896→256 controller outputs a raw tangent residual every four actor ticks; the actor latent is
-    slerped between consecutive waypoints at 50 Hz. Goal latents and target features come from an
-    offline bank built by scripts/bfm_pose_bank.py.
-    """
-
-    task_type: ClassVar[type] = BfmPoseTransitionTaskConfig
-    command_obs: ClassVar[dict[str, tuple[int, str]]] = {
-        "goal_latents": (2 * LATENT_DIM, "bfm_waypoint:goal_latents"),
-        "target": (33, "pose_transition:target_pose"),
-        "timing": (2, "bfm_waypoint:timing"),
-    }
-
-    def _setup_task(self) -> None:
-        with np.load(self.task.pose_bank_path, allow_pickle=False) as bank:
-            names = bank["pose_names"].tolist()
-            if tuple(bank["joint_names"].tolist()) != JOINT_NAMES:
-                raise ValueError("BFM pose bank joint order does not match G1")
-            latents, targets = bank["latents"], bank["targets"]
-        if latents.shape != (len(names), LATENT_DIM) or targets.shape != (len(names), 33):
-            raise ValueError("BFM pose bank must contain (N, 256) latents and (N, 33) targets")
-        if not np.allclose(np.linalg.norm(latents, axis=-1), LATENT_DIM**0.5, atol=1e-3):
-            raise ValueError("BFM pose bank latents must have radius 16")
-        for name in (self.task.source_pose, self.task.target_pose):
-            if name not in names:
-                raise ValueError(f"BFM pose {name!r} is not in the bank: {names}")
-        source, target = names.index(self.task.source_pose), names.index(self.task.target_pose)
-        self.source_latent = latents[source : source + 1].astype(np.float32)
-        self.target_latent = latents[target : target + 1].astype(np.float32)
-        self.goal_latents = np.concatenate((self.source_latent, self.target_latent), axis=1)
-        self.target_features = targets[target : target + 1].astype(np.float32)
-
-    def _reset_episode(self) -> None:
-        super()._reset_episode()
-        self.latent = self.source_latent
-        self.from_node = self.to_node = self.source_latent
-
-    def _command_observation(self) -> dict[str, np.ndarray]:
-        duration = self.task.transition_duration_s
-        progress = np.clip((self._episode_step / self.rl_rate - self.task.settle_s) / duration, -1, 2)
-        return {
-            "goal_latents": self.goal_latents,
-            "target": self.target_features,
-            "timing": np.asarray([[progress, duration]]),
-        }
-
-    def _update_latent(self, frame: np.ndarray) -> None:
-        settle, duration = self.task.settle_s, self.task.transition_duration_s
-        decimation = self.task.controller_decimation
-        time = self._episode_step / self.rl_rate
-        step_start = (self._episode_step - self._episode_step % decimation) / self.rl_rate
-        step_dt = decimation / self.rl_rate
-        if self._episode_step % decimation == 0 and time < settle + duration:
-            residual = self._run_controller(frame).astype(np.float64)
-            phase = (step_start + step_dt - settle) / duration
-            self.from_node = self.to_node
-            self.to_node = residual_waypoint(self.source_latent, self.target_latent, phase, residual)
-        if time < settle:
-            self.latent = self.source_latent
-        elif time >= settle + duration:
-            self.latent = self.target_latent
-        else:
-            start, end = max(step_start, settle), min(step_start + step_dt, settle + duration)
-            fraction = float(np.clip((time - start) / max(end - start, 1 / self.rl_rate), 0, 1))
-            self.latent = slerp(self.from_node, self.to_node, fraction)
-
-
-class BfmWalkTokenPolicy(BfmWalkPolicy):
-    """Holosoma bfm_walk_token: the 356-D walk observation selects one row of a fixed latent vocabulary.
-
-    The categorical export returns the token index ``action[1, 1]``; its top-k Gumbel sampling runs
-    inside the ONNX graph. The executed latent is the projected vocabulary row.
-    """
-
-    task_type: ClassVar[type] = BfmTokenTaskConfig
-    repeat_first_actor_frame: ClassVar[bool] = True
-    controller_output_dim: ClassVar[int] = 1
-    token_action = "holosoma.managers.action.terms.bfm:BFMTokenAction"
-
-    def _setup_task(self) -> None:
-        self.vocab, self.vocab_metadata = load_latent_vocab(self.task.vocab_path)
-        choices = categorical_choices(self.task.model_path)
-        if choices != len(self.vocab):
-            raise ValueError(f"BFM token controller has {choices} logits but the vocabulary {len(self.vocab)} rows")
-
-    def _validate_experiment(self, experiment: dict) -> None:
-        terms = experiment["action"]["terms"]
-        if len(terms) != 1 or next(iter(terms.values()))["func"] != self.token_action:
-            raise ValueError("BFM token controller must be trained with one BFMTokenAction term")
-        trained = str(next(iter(terms.values()))["params"]["vocab_path"]).rstrip("/").rsplit("/", 1)[-1]
-        if trained != Path(self.task.vocab_path).name:
-            raise ValueError(f"BFM token controller was trained with vocabulary {trained!r}")
-        if experiment["algo"]["config"]["module_dict"]["actor"].get("distribution") != "categorical":
-            raise ValueError("BFM token controller must use a categorical actor")
-
-    def _reset_episode(self) -> None:
-        super()._reset_episode()
-        self.token = -1
-
-    def _decode_latent(self, action: np.ndarray) -> np.ndarray:
-        self.token = _token(action, len(self.vocab))
-        return self.vocab[self.token : self.token + 1].copy()
-
-
-class BfmWalkCodebookPolicy(BfmWalkPolicy):
-    """Holosoma bfm_walk_codebook: the 356-D walk observation selects a learned codeword.
-
-    The codebook export returns ``action[1, 257]``: the token chosen by in-graph top-k Gumbel
-    sampling, then its noiseless codeword. Codewords were trained away from the initial vocabulary
-    and are baked into the graph, so no vocabulary is read; the executed latent is the projected
-    codeword, as BFMCodebookAction projects the sampled latent.
-    """
-
-    repeat_first_actor_frame: ClassVar[bool] = True
-    controller_output_dim: ClassVar[int] = 1 + LATENT_DIM
-    codebook_action = "holosoma.managers.action.terms.bfm:BFMCodebookAction"
-
-    def _setup_task(self) -> None:
-        self.num_choices = categorical_choices(self.task.model_path)
-
-    def _validate_experiment(self, experiment: dict) -> None:
-        terms = experiment["action"]["terms"]
-        if len(terms) != 1 or next(iter(terms.values()))["func"] != self.codebook_action:
-            raise ValueError("BFM codebook controller must be trained with one BFMCodebookAction term")
-        if experiment["algo"]["config"]["module_dict"]["actor"].get("distribution") != "codebook":
-            raise ValueError("BFM codebook controller must use a codebook actor")
-
-    def _reset_episode(self) -> None:
-        super()._reset_episode()
-        self.token = -1
-
-    def _decode_latent(self, action: np.ndarray) -> np.ndarray:
-        token = _token(action, self.num_choices)
-        codeword = action[:, 1:]
-        # Finiteness is checked by _infer; a zero codeword has no direction to project.
-        if not np.linalg.norm(codeword) > 1e-6:
-            raise PolicyRuntimeFault("BFM codebook controller returned an invalid codeword")
-        self.token = token
-        return project_latent(codeword)
-
-
-class BfmTokenPassiveWalkPolicy(BfmWalkCodebookPolicy):
-    """Holosoma bfm_token_passive_walk: command-free codebook control following arm tethers.
-
-    The controller sees four controller-step frames, an always-running gait clock and the
-    previous latent (4x93 + 4 + 256 = 632) and returns [token, codeword]; the tether and the
-    walk/lift task are privileged and critic-only.
-    """
-
-    command_group: ClassVar[str] = "phase_obs"
-    input_names: ClassVar[frozenset[str]] = frozenset()
-    command_obs: ClassVar[dict[str, tuple[int, str]]] = {
-        "cos_phase": (2, "locomotion:cos_phase"),
-        "sin_phase": (2, "locomotion:sin_phase"),
-    }
-    frame_history: ClassVar[int] = 4
-
-    def _command_observation(self) -> dict[str, np.ndarray]:
-        # PassiveWalkingGait never gates the clock as standing.
-        phase = self._clock_phase()
-        return {"cos_phase": np.cos(phase), "sin_phase": np.sin(phase)}

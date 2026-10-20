@@ -18,7 +18,7 @@ import onnxruntime as ort
 import torch
 from torch import nn
 
-from vex_policy.policies.utils.bfm import (
+from vex_policy.policies.bfm.contract import (
     ACTOR_CONTRACT_VERSION,
     ACTOR_OBS_DIM,
     DEFAULT_DOF_ANGLES,

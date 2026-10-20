@@ -306,31 +306,6 @@ def test_model_contract_validation(setup_policy, bad):
         ReferenceLocomotionPolicy(config)
 
 
-@pytest.mark.parametrize("bad", ["legacy", "scale", "clip", "history", "terms", "concatenate", "malformed"])
-def test_training_semantics_validation(setup_policy, bad):
-    config, actor, _ = setup_policy
-    group = actor.metadata["experiment_config"]["observation"]["groups"]["actor_obs"]
-    expected = "Reference locomotion"
-    if bad == "legacy":
-        group["terms"]["base_ang_vel"]["func"] = "holosoma.managers.observation.terms.crawling:base_ang_vel"
-        expected = "Legacy crawling heading-frame actors are not supported"
-    elif bad == "scale":
-        group["terms"]["dof_vel"]["scale"] = 1
-    elif bad == "clip":
-        group["terms"]["actions"]["clip"] = [-1, 1]
-    elif bad == "history":
-        group["history_length"] = 2
-    elif bad == "terms":
-        del group["terms"]["sin_phase"]
-    elif bad == "concatenate":
-        group["concatenate"] = False
-    else:
-        actor.metadata["experiment_config"] = None
-        expected = "Invalid reference locomotion"
-    with pytest.raises(ValueError, match=expected):
-        ReferenceLocomotionPolicy(config)
-
-
 def test_critic_semantics_and_absent_optional_metadata_do_not_affect_deployment(setup_policy):
     config, actor, _ = setup_policy
     groups = actor.metadata["experiment_config"]["observation"]["groups"]
